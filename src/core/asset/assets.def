@@ -1,0 +1,3 @@
+ASSET_TYPE(Mesh,    mesh_asset_type_init)
+ASSET_TYPE(Texture, texture_asset_type_init)
+ASSET_TYPE(Scene,   scene_asset_type_init)

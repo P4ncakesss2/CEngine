@@ -1,0 +1,15 @@
+[submodule "external/box3d"]
+	path = external/box3d
+	url = git@github.com:erincatto/box3d.git
+[submodule "external/cglm"]
+	path = external/cglm
+	url = git@github.com:recp/cglm.git
+[submodule "external/cimgui"]
+	path = external/cimgui
+	url = git@github.com:cimgui/cimgui.git
+[submodule "external/glfw"]
+	path = external/glfw
+	url = git@github.com:glfw/glfw.git
+[submodule "external/vma"]
+	path = external/vma
+	url = git@github.com:GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git

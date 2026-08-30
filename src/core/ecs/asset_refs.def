@@ -1,0 +1,4 @@
+ASSET_REF_FIELD(Mesh, meshRef)
+ASSET_REF_FIELD(Material, albedoRef)
+ASSET_REF_FIELD(Scene, sceneRef)
+ASSET_REF_ARRAY(Skybox, faces, 6)
