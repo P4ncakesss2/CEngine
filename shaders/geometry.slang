@@ -1,5 +1,5 @@
 // to be baked into a header file!!!!
-struct ObjectData
+struct ObjectData // at some point split material from here, add tiling and normal
 {
     float4x4 model;
     float4x4 invmodel;
@@ -22,6 +22,11 @@ struct PushConstants
 [vk::push_constant] PushConstants pc;
 [[vk::binding(0, 0)]] SamplerState bindlessSamplers[];
 [[vk::binding(1, 0)]] Texture2D bindlessTextures[];
+
+static const float3 kSunDirection = normalize(float3(-0.4, -1.0, -0.3));
+static const float3 kSunColor     = float3(1.0, 0.96, 0.9);
+static const float  kSunIntensity = 1.0;
+static const float3 kAmbient      = float3(0.08, 0.08, 0.1);
 
 struct VSInput
 {
@@ -56,5 +61,9 @@ float4 fragmentMain(VSOutput input) : SV_Target
     uint albedoIndex = NonUniformResourceIndex(pc.object->albedoIndex);
     uint samplerIndex = NonUniformResourceIndex(pc.object->samplerIndex);
     float4 albedo = bindlessTextures[albedoIndex].Sample(bindlessSamplers[samplerIndex], input.uv1);
-    return albedo;
+
+    float ndotl = max(dot(normal, -kSunDirection), 0.0);
+    float3 lighting = kAmbient + kSunColor * kSunIntensity * ndotl;
+
+    return float4(albedo.rgb * lighting, albedo.a);
 }
