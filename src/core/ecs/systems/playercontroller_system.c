@@ -8,13 +8,38 @@
 #include <math.h>
 #include "physics_system.h"
 
-static float lerp(float a, float b, float t) {
-    return a + t * (b - a);
-}
-
 typedef struct {
     char dummy; 
 } PlayerControllerSystem;
+
+static void apply_friction(vec3 velocity, float friction, float dt) {
+    float speed = sqrtf(velocity[0] * velocity[0] + velocity[2] * velocity[2]);
+    if (speed < 0.0001f) {
+        velocity[0] = 0.0f;
+        velocity[2] = 0.0f;
+        return;
+    }
+
+    float drop = speed * friction * dt;
+    float newSpeed = speed - drop;
+    if (newSpeed < 0.0f) newSpeed = 0.0f;
+
+    float scale = newSpeed / speed;
+    velocity[0] *= scale;
+    velocity[2] *= scale;
+}
+
+static void accelerate(vec3 velocity, const vec3 wishDir, float wishSpeed, float accel, float dt) {
+    float currentSpeed = velocity[0] * wishDir[0] + velocity[2] * wishDir[2];
+    float addSpeed = wishSpeed - currentSpeed;
+    if (addSpeed <= 0.0f) return;
+
+    float accelSpeed = accel * dt * wishSpeed;
+    if (accelSpeed > addSpeed) accelSpeed = addSpeed;
+
+    velocity[0] += accelSpeed * wishDir[0];
+    velocity[2] += accelSpeed * wishDir[2];
+}
 
 static void player_controller_free(void *sys_data) {
     if (sys_data) {
@@ -54,40 +79,42 @@ static void player_controller_update(void *sys_data, SystemManager *mgr, float d
         vec3 forward = { sinf(player->yaw), 0.0f, cosf(player->yaw) };
         vec3 right   = { cosf(player->yaw), 0.0f, -sinf(player->yaw) };
 
-        vec3 targetVelocity = {0.0f, 0.0f, 0.0f};
-        if (window_key_down(win, GLFW_KEY_W)) glm_vec3_sub(targetVelocity, forward, targetVelocity);
-        if (window_key_down(win, GLFW_KEY_S)) glm_vec3_add(targetVelocity, forward, targetVelocity);
-        if (window_key_down(win, GLFW_KEY_D)) glm_vec3_add(targetVelocity, right, targetVelocity);
-        if (window_key_down(win, GLFW_KEY_A)) glm_vec3_sub(targetVelocity, right, targetVelocity);
+        vec3 wishDir = {0.0f, 0.0f, 0.0f};
+        if (window_key_down(win, GLFW_KEY_W)) glm_vec3_sub(wishDir, forward, wishDir);
+        if (window_key_down(win, GLFW_KEY_S)) glm_vec3_add(wishDir, forward, wishDir);
+        if (window_key_down(win, GLFW_KEY_D)) glm_vec3_add(wishDir, right, wishDir);
+        if (window_key_down(win, GLFW_KEY_A)) glm_vec3_sub(wishDir, right, wishDir);
 
-        if (glm_vec3_norm2(targetVelocity) > 0.0f) {
-            glm_vec3_normalize(targetVelocity);
+        if (glm_vec3_norm2(wishDir) > 0.0f) {
+            glm_vec3_normalize(wishDir);
         }
-        
-        targetVelocity[0] *= player->moveSpeed;
-        targetVelocity[2] *= player->moveSpeed;
-
-        float verticalVelocity = player->currentVelocity[1];
-        verticalVelocity -= phys->gravity * dt; 
 
         PhysicsRaycastHit hit;
         vec3 rayOrigin;
         glm_vec3_copy(t->position, rayOrigin);
-        vec3 rayDir = {0.0f, -1.75f, 0.0f}; 
-        
-        bool grounded = physics_system_raycast(phys, ecs, rayOrigin, rayDir, UINT64_MAX, &hit); //[cite: 1]
+        vec3 rayDir = {0.0f, -1.75f, 0.0f};
+
+        bool grounded = physics_system_raycast(phys, ecs, rayOrigin, rayDir, UINT64_MAX, &hit);
+
+        if (grounded) {
+            apply_friction(player->currentVelocity, player->groundFriction, dt);
+            accelerate(player->currentVelocity, wishDir, player->maxGroundSpeed, player->groundAccel, dt);
+        } else {
+            accelerate(player->currentVelocity, wishDir, player->maxAirSpeed, player->airAccel, dt);
+        }
+
+        float verticalVelocity = player->currentVelocity[1];
+        verticalVelocity -= phys->gravity * dt;
 
         if (grounded && verticalVelocity < 0.0f) {
-            verticalVelocity = -0.5f; 
+            verticalVelocity = -0.5f;
             if (window_key_down(win, GLFW_KEY_SPACE)) {
-                verticalVelocity = 4.5f;
+                verticalVelocity = player->jumpForce;
             }
         }
 
-        float smoothingFactor = fminf(1.0f, dt * 25.0f);
-        player->currentVelocity[0] = lerp(player->currentVelocity[0], targetVelocity[0], smoothingFactor);
-        player->currentVelocity[2] = lerp(player->currentVelocity[2], targetVelocity[2], smoothingFactor);
         player->currentVelocity[1] = verticalVelocity;
+        player->wasGrounded = grounded;
 
         physics_system_move_mover(phys, ecs, col, t->position, player->currentVelocity, dt, UINT64_MAX); 
     }

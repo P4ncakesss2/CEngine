@@ -137,11 +137,17 @@ typedef struct {
 } Collider;
 
 typedef struct {
-    float moveSpeed;
     float lookSensitivity;
     float pitch;
     float yaw;
     vec3 currentVelocity;
+    float maxGroundSpeed;
+    float maxAirSpeed;
+    float groundAccel;
+    float airAccel;
+    float groundFriction;
+    float jumpForce; 
+    bool  wasGrounded;
 } PlayerController;
 
 typedef struct {

@@ -513,7 +513,7 @@ static bool mover_pushed_set_contains(const MoverPushedSet *set, b3BodyId id) {
     return false;
 }
 
-static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, const b3Plane *plane, b3Vec3 contactPoint, b3Vec3 moverVelocity, float moverMass, float moverFriction, float gravity, float dt) {
+static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, const b3Plane *plane, b3Vec3 contactPoint, b3Vec3 *moverVelocity, float moverMass, float moverFriction, float gravity, float dt) {
     b3Vec3 normal = plane->normal;
     b3Vec3 pushDir = {-normal.x, 0.0f, -normal.z};
     float pushDirLenSq = pushDir.x * pushDir.x + pushDir.z * pushDir.z;
@@ -523,7 +523,7 @@ static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, 
     pushDir.x *= invLen;
     pushDir.z *= invLen;
 
-    float approachSpeed = -(moverVelocity.x * normal.x + moverVelocity.z * normal.z);
+    float approachSpeed = -(moverVelocity->x * normal.x + moverVelocity->z * normal.z);
     if (approachSpeed <= 0.0f) return;
     float pushSpeed = approachSpeed * PHYSICS_MOVER_PUSH_SPEED_SCALE;
     float mass = b3Body_GetMass(bodyId);
@@ -546,6 +546,8 @@ static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, 
 
     b3Vec3 impulse = {pushDir.x * appliedImpulseMag, 0.0f, pushDir.z * appliedImpulseMag};
     b3Body_ApplyLinearImpulse(bodyId, impulse, contactPoint, true);
+    moverVelocity->x -= impulse.x / moverMass;
+    moverVelocity->z -= impulse.z / moverMass;
 
     if (!w) return;
     Entity e = entity_from_shape(shapeId);
@@ -557,12 +559,17 @@ static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, 
     rb->linearVelocity[0] = newVel.x;
     rb->linearVelocity[1] = newVel.y;
     rb->linearVelocity[2] = newVel.z;
+
+    b3Vec3 newAngVel = b3Body_GetAngularVelocity(bodyId);
+    rb->angularVelocity[0] = newAngVel.x;
+    rb->angularVelocity[1] = newAngVel.y;
+    rb->angularVelocity[2] = newAngVel.z;
 }
 
 typedef struct {
     b3CollisionPlane planes[PHYSICS_MOVER_MAX_PLANES];
     int count;
-    b3Vec3 moverVelocity;
+    b3Vec3 *moverVelocity;
     float moverMass;
     float moverFriction;
     float gravity;
@@ -626,7 +633,7 @@ static bool mover_capsule_from_collider(const Collider *collider, const vec3 ori
 static bool mover_depenetrate(Ecs *w, b3WorldId world, const Collider *collider, b3QueryFilter filter,
                                vec3 origin, b3Capsule *mover,
                                b3CollisionPlane *touchedPlanes, int *touchedCount,
-                               b3Vec3 moverVelocity, float moverMass, float moverFriction, float gravity,
+                               b3Vec3 *moverVelocity, float moverMass, float moverFriction, float gravity,
                                float dt, MoverPushedSet *pushed) {
     b3Pos zero = {0.0f, 0.0f, 0.0f};
     bool foundAny = false;
@@ -684,7 +691,7 @@ void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *colli
 
     b3CollisionPlane touchedPlanes[PHYSICS_MOVER_MAX_PLANES];
     int touchedCount = 0;
-    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, moverVelocity, moverMass, moverFriction, gravity, dt, &pushed);
+    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, &moverVelocity, moverMass, moverFriction, gravity, dt, &pushed);
     b3Vec3 translation = to_b3vec3((vec3){velocity[0] * dt, velocity[1] * dt, velocity[2] * dt});
 
     float fraction = b3World_CastMover(sys->world, zero, &mover, translation, filter, NULL, NULL);
@@ -692,11 +699,9 @@ void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *colli
     origin[1] += velocity[1] * dt * fraction;
     origin[2] += velocity[2] * dt * fraction;
     mover_capsule_from_collider(collider, origin, &mover);
-    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, moverVelocity, moverMass, moverFriction, gravity, dt, &pushed);
+    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, &moverVelocity, moverMass, moverFriction, gravity, dt, &pushed);
 
-    if (touchedCount == 0) return;
-
-    b3Vec3 clipped = b3ClipVector(to_b3vec3(velocity), touchedPlanes, touchedCount);
+    b3Vec3 clipped = touchedCount > 0 ? b3ClipVector(moverVelocity, touchedPlanes, touchedCount) : moverVelocity;
     velocity[0] = clipped.x;
     velocity[1] = clipped.y;
     velocity[2] = clipped.z;

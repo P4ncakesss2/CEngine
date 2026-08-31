@@ -76,9 +76,14 @@ static void spawn_flying_camera(Ecs *ecs) {
     };
     ECS_ADD(ecs, e, Camera, cam);
 
-    PlayerController player = { 
-        .moveSpeed = 5.0f, 
-        .lookSensitivity = 0.005f 
+    PlayerController player = {
+        .lookSensitivity = 0.005f,
+        .maxGroundSpeed  = 7.0f,
+        .maxAirSpeed     = 2.0f,
+        .groundAccel     = 10.0f,
+        .airAccel        = 20.0f, 
+        .groundFriction  = 6.0f,
+        .jumpForce       = 4.5f,
     };
     ECS_ADD(ecs, e, PlayerController, player);
 
