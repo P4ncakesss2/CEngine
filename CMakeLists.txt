@@ -39,6 +39,22 @@ set_source_files_properties(
     PROPERTIES HEADER_FILE_ONLY TRUE
 )
 
+set(SHADER_HEADER "${CMAKE_SOURCE_DIR}/src/core/graphics/shaders.h")
+file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/shaders/*.slang"
+)
+
+add_custom_command(
+    OUTPUT ${SHADER_HEADER}
+    COMMAND ${CMAKE_SOURCE_DIR}/gen_shaders.sh -o ${SHADER_HEADER} ${SHADER_SOURCES}
+    DEPENDS ${SHADER_SOURCES} ${CMAKE_SOURCE_DIR}/gen_shaders.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Compiling Slang shaders -> ${SHADER_HEADER}"
+    VERBATIM
+)
+
+add_custom_target(generate_shaders DEPENDS ${SHADER_HEADER})
+
 set(CIMGUI_DIR "${CMAKE_SOURCE_DIR}/external/cimgui")
 set(IMGUI_DIR "${CIMGUI_DIR}/imgui")
 
@@ -83,6 +99,8 @@ target_link_libraries(cengine_core PUBLIC
     cimgui
     box3d::box3d
 )
+
+add_dependencies(cengine_core generate_shaders)
 
 file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/game/*.c"

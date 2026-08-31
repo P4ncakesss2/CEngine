@@ -4,7 +4,7 @@
 #include "image.h"
 #include "../asset/mesh.h"
 #include "../asset/texture.h"
-#include "geometry_spirv.h"
+#include "shaders.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

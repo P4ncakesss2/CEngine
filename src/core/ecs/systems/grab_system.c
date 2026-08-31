@@ -18,13 +18,13 @@ static void grab_free(void *sys_data) {
     }
 }
 
-static void camera_forward(const FlyingCamera *cam, vec3 out) {
+static void camera_forward(const PlayerController *cam, vec3 out) {
     out[0] = -sinf(cam->yaw) * cosf(cam->pitch);
     out[1] = sinf(cam->pitch);
     out[2] = -cosf(cam->yaw) * cosf(cam->pitch);
 }
 
-static void camera_quat(const FlyingCamera *cam, versor out) {
+static void camera_quat(const PlayerController *cam, versor out) {
     vec3 up    = {0.0f, 1.0f, 0.0f};
     vec3 right = {1.0f, 0.0f, 0.0f};
 
@@ -58,7 +58,7 @@ static void grab_release(Ecs *ecs, Grabber *grabber) {
     grabber->holding = false;
 }
 
-static void grab_try_pickup(PhysicsSystem *phys, Ecs *ecs, Transform *t, const FlyingCamera *cam, Grabber *grabber, const vec3 forward) {
+static void grab_try_pickup(PhysicsSystem *phys, Ecs *ecs, Transform *t, const PlayerController *cam, Grabber *grabber, const vec3 forward) {
     vec3 castTranslation = {
         forward[0] * grabber->maxGrabDistance,
         forward[1] * grabber->maxGrabDistance,
@@ -90,7 +90,7 @@ static void grab_try_pickup(PhysicsSystem *phys, Ecs *ecs, Transform *t, const F
     glm_quat_normalize(grabber->rotationOffset);
 }
 
-static void grab_update_held(Ecs *ecs, Transform *t, const FlyingCamera *cam, Grabber *grabber, const vec3 forward) {
+static void grab_update_held(Ecs *ecs, Transform *t, const PlayerController *cam, Grabber *grabber, const vec3 forward) {
     Entity held = (Entity)grabber->heldEntity;
 
     bool stillValid = ecs_entity_alive(ecs, held)
@@ -175,8 +175,8 @@ static void grab_system_update(void *sys_data, SystemManager *mgr, float dt) {
     Window *win = mgr->window;
     PhysicsSystem *phys = SYSTEM_GET(mgr, Physics);
 
-    ECS_EACH(ecs, ECS_MASK(COMPONENT_FlyingCamera, COMPONENT_Transform, COMPONENT_Grabber), e) {
-        FlyingCamera *cam     = ECS_GET(ecs, e, FlyingCamera);
+    ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform, COMPONENT_Grabber), e) {
+        PlayerController *cam     = ECS_GET(ecs, e, PlayerController);
         Transform    *t       = ECS_GET(ecs, e, Transform);
         Grabber      *grabber = ECS_GET(ecs, e, Grabber);
 

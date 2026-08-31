@@ -76,11 +76,11 @@ static void spawn_flying_camera(Ecs *ecs) {
     };
     ECS_ADD(ecs, e, Camera, cam);
 
-    FlyingCamera flyCam = { 
-        .moveSpeed = 10.0f, 
+    PlayerController player = { 
+        .moveSpeed = 5.0f, 
         .lookSensitivity = 0.005f 
     };
-    ECS_ADD(ecs, e, FlyingCamera, flyCam);
+    ECS_ADD(ecs, e, PlayerController, player);
 
     Grabber grabber = {
         .holdDistance    = 2.0f,
@@ -94,10 +94,10 @@ static void spawn_flying_camera(Ecs *ecs) {
 
     Collider col = { .type = COLLIDER_Capsule };
     col.capsule.radius = 0.3f;
-    col.capsule.height = 0.5f;
+    col.capsule.height = 1.8f;
 	col.mass = 75.0f;
     col.friction = 0.8f;
-    col.offset[1] = -0.25f;
+    col.offset[1] = -1.7f;
 	col.categoryBits = 1;
     col.maskBits = 1;
     ECS_ADD(ecs, e, Collider, col);
@@ -111,7 +111,7 @@ void scene_build_level1(Ecs *w)
 
 	spawn_flying_camera(w);
 
-	Entity ground = spawn_node(w, "Ground", origin, GLM_VEC3_ZERO, (vec3){5, 0.25, 5});
+	Entity ground = spawn_node(w, "Ground", origin, GLM_VEC3_ZERO, (vec3){500, 0.25, 500});
 	Mesh groundMesh = {0};
 	asset_ref_set(w, &groundMesh.meshRef, MESH_PROC_PLANE);
 	Material groundMaterial = {0};
@@ -128,7 +128,7 @@ void scene_build_level1(Ecs *w)
 	groundCollider.type = COLLIDER_Box;
 	groundCollider.categoryBits = 1;
     groundCollider.maskBits = 1;
-	glm_vec3_copy((vec3){5.0f, 1.0f, 5.0f}, groundCollider.box.halfExtents);
+	glm_vec3_copy((vec3){500.0f, 1.0f, 500.0f}, groundCollider.box.halfExtents);
 	groundCollider.offset[1] = -1.0f;
 	groundCollider.friction = 0.8f;
 	ECS_ADD(w, ground, Collider, groundCollider);
@@ -159,12 +159,11 @@ void scene_build_level1(Ecs *w)
 	}
 
 	const int targetRow = 3;
-	vec3 projectileHalfExtents = {0.35f, 0.35f, 0.35f};
 	vec3 projectilePos = {
 		0.0f,
 		groundTopY + boxHalfExtents[1] + targetRow * boxSpacing,
 		12.0f
 	};
 	vec3 projectileVelocity = {0.0f, 0.0f, -35.0f};
-	//spawn_dynamic_box(w, "Cannonball", projectilePos, GLM_VEC3_ZERO, projectileHalfExtents, 15.0f, projectileVelocity, true);
+	spawn_dynamic_box(w, "Cannonball", projectilePos, GLM_VEC3_ZERO, boxHalfExtents, 15.0f, projectileVelocity, true);
 }

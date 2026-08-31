@@ -142,7 +142,7 @@ typedef struct {
     float pitch;
     float yaw;
     vec3 currentVelocity;
-} FlyingCamera;
+} PlayerController;
 
 typedef struct {
     bool holding;
