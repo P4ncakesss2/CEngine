@@ -153,6 +153,9 @@ typedef struct {
     float maxPullSpeed;
     float maxGrabDistance;
     float savedGravityScale; 
-} Grabber;
 
+    versor rotationOffset;
+    float rotationPullStrength;
+    float maxRotationSpeed;
+} Grabber;
 #endif

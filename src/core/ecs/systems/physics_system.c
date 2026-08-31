@@ -4,6 +4,77 @@
 #include <math.h>
 #include <float.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
+
+static uint32_t get_performance_core_count(void) {
+#if defined(_WIN32)
+    DWORD length = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length);
+    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* info = 
+            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)malloc(length);
+        
+        if (GetLogicalProcessorInformationEx(RelationProcessorCore, info, &length)) {
+            uint32_t p_cores = 0;
+            uint32_t total_physical = 0;
+            char* ptr = (char*)info;
+            
+            while (ptr < ((char*)info) + length) {
+                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* pi = 
+                    (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)ptr;
+                
+                if (pi->Relationship == RelationProcessorCore) {
+                    total_physical++;
+                    // On Intel architectures, EfficiencyClass > 0 usually denotes P-cores
+                    if (pi->Processor.EfficiencyClass > 0) {
+                        p_cores++;
+                    }
+                }
+                ptr += pi->Size;
+            }
+            free(info);
+            // If p_cores is 0, CPU isn't hybrid (no E-cores). Return total physical cores.
+            return p_cores > 0 ? p_cores : (total_physical > 0 ? total_physical : 4);
+        }
+        free(info);
+    }
+    return 4;
+
+#elif defined(__APPLE__)
+    int count = 0;
+    size_t size = sizeof(count);
+    // Apple Silicon: Specifically requests Performance (P) cores
+    if (sysctlbyname("hw.perflevel0.physicalcpu", &count, &size, NULL, 0) == 0 && count > 0) {
+        return (uint32_t)count;
+    }
+    // Fallback: Intel Macs (Gets all physical cores, ignoring hyper-threading)
+    if (sysctlbyname("hw.physicalcpu", &count, &size, NULL, 0) == 0 && count > 0) {
+        return (uint32_t)count;
+    }
+    return 4;
+
+#elif defined(__linux__)
+    // Parsing /sys/devices/system/cpu to separate P and E cores in C requires
+    // deep file reading. This is a common heuristic: logical cores divided by 2 
+    // to account for standard hyper-threading.
+    long logical_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    if (logical_cores > 2) {
+        return (uint32_t)(logical_cores / 2);
+    }
+    return logical_cores > 0 ? (uint32_t)logical_cores : 4;
+
+#else
+    return 4; // Fallback for unknown OS
+#endif
+}
+
 #define PHYSICS_FIXED_DT     (1.0f / 60.0f)
 #define PHYSICS_MAX_SUBSTEPS 5
 
@@ -32,9 +103,17 @@ static Entity userdata_to_entity(void *ud) {
 }
 
 static void mat4_to_euler_yxz(mat4 m, vec3 out_rotation) {
-    out_rotation[0] = asinf(-glm_clamp(m[2][1], -1.0f, 1.0f));
-    out_rotation[1] = atan2f(m[2][0], m[2][2]);
-    out_rotation[2] = atan2f(m[0][1], m[1][1]);
+    float sx = glm_clamp(m[2][1], -1.0f, 1.0f);
+    out_rotation[0] = asinf(-sx);
+
+    const float poleEps = 1e-6f;
+    if (1.0f - fabsf(sx) < poleEps) {
+        out_rotation[1] = atan2f(-m[0][2], m[0][0]);
+        out_rotation[2] = 0.0f;
+    } else {
+        out_rotation[1] = atan2f(m[2][0], m[2][2]);
+        out_rotation[2] = atan2f(m[0][1], m[1][1]);
+    }
 }
 
 static void euler_to_glm_quat(const vec3 rotation, versor out) {
@@ -46,21 +125,12 @@ static void euler_to_glm_quat(const vec3 rotation, versor out) {
     glm_mat4_quat(m, out);
 }
 
-static void compute_world_rotation(Ecs *w, Entity e, const Transform *t, versor out) {
-    versor local;
-    euler_to_glm_quat(t->rotation, local);
-
-    Parent *p = ECS_GET(w, e, Parent);
-    if (p && ecs_entity_alive(w, p->entity)) {
-        Transform *pt = ECS_GET(w, p->entity, Transform);
-        if (pt) {
-            versor parentRot;
-            compute_world_rotation(w, p->entity, pt, parentRot);
-            glm_quat_mul(parentRot, local, out);
-            return;
-        }
-    }
-    glm_quat_copy(local, out);
+static void mat4_rotation_only(mat4 in, mat4 out) {
+    glm_mat4_copy(in, out);
+    glm_vec3_normalize(out[0]);
+    glm_vec3_normalize(out[1]);
+    glm_vec3_normalize(out[2]);
+    out[3][0] = out[3][1] = out[3][2] = 0.0f;
 }
 
 static void compute_world_transform(Ecs *w, Entity e, const Transform *t, vec3 out_pos, b3Quat *out_rot) {
@@ -88,8 +158,14 @@ static void compute_world_transform(Ecs *w, Entity e, const Transform *t, vec3 o
     out_pos[1] = world[3][1];
     out_pos[2] = world[3][2];
 
-    versor rotQuat;
-    compute_world_rotation(w, e, t, rotQuat);
+    mat4 parentRotOnly;
+    mat4_rotation_only(parent_mat, parentRotOnly);
+
+    versor parentRotQuat, localRotQuat, rotQuat;
+    glm_mat4_quat(parentRotOnly, parentRotQuat);
+    euler_to_glm_quat(t->rotation, localRotQuat);
+    glm_quat_mul(parentRotQuat, localRotQuat, rotQuat);
+
     out_rot->v.x = rotQuat[0];
     out_rot->v.y = rotQuat[1];
     out_rot->v.z = rotQuat[2];
@@ -290,6 +366,19 @@ static void writeback_and_reap(PhysicsSystem *sys, Ecs *w) {
                            && ECS_HAS(w, entry->entity, Collider);
         if (!stillOwnsBody) {
             b3DestroyBody(entry->bodyId);
+
+            if (ecs_entity_alive(w, entry->entity)) {
+                RigidBody *rb = ECS_GET(w, entry->entity, RigidBody);
+                if (rb) {
+                    rb->created = false;
+                    rb->bodyId  = b3_nullBodyId;
+                }
+                Collider *col = ECS_GET(w, entry->entity, Collider);
+                if (col) {
+                    col->created = false;
+                    col->shapeId = b3_nullShapeId;
+                }
+            }
             continue;
         }
         sys->bodies[writeIdx++] = *entry;
@@ -345,10 +434,15 @@ void physics_system_init(PhysicsSystem *sys) {
     sys->fixedDt = PHYSICS_FIXED_DT;
 
     b3WorldDef def = b3DefaultWorldDef();
+    def.workerCount = get_performance_core_count();
     sys->world = b3CreateWorld(&def);
+    if (B3_IS_NULL(sys->world)) {
+        return;
+    }
     sys->gravity = sqrtf(def.gravity.x * def.gravity.x
                         + def.gravity.y * def.gravity.y
                         + def.gravity.z * def.gravity.z);
+    return;
 }
 
 void physics_system_free(PhysicsSystem *sys) {
@@ -374,12 +468,6 @@ void physics_system_update(PhysicsSystem *sys, Ecs *w, float dt) {
 
     int steps = 0;
     if (sys->accumulator >= sys->fixedDt) {
-        /* About to advance the sim - snapshot where each body is RIGHT NOW
-         * as the interpolation start point. If we don't do this and instead
-         * always re-snapshot every frame, "prev" would drift to wherever the
-         * body happened to be on the last render frame instead of the last
-         * physics frame, and the blend below would collapse to nothing on
-         * frames where no step runs. */
         for (uint32_t i = 0; i < sys->bodyCount; i++) {
             PhysicsBodyEntry *entry = &sys->bodies[i];
             if (entry->isStatic) continue;
@@ -407,12 +495,8 @@ static Entity entity_from_shape(b3ShapeId shapeId) {
 
 #define PHYSICS_MOVER_PUSH_MAX_BODIES   8
 #define PHYSICS_MOVER_PUSH_SPEED_SCALE  1.0f
-/* Fallback if the mover's own collider has no mass set (mass <= 0) - keeps
- * pushing from silently doing nothing if a designer forgets to set it. */
 #define PHYSICS_MOVER_DEFAULT_MASS      20.0f
 
-/* Tracks which dynamic bodies have already been pushed this frame so a body
- * touched across multiple depenetration iterations only gets pushed once. */
 typedef struct {
     b3BodyId ids[PHYSICS_MOVER_PUSH_MAX_BODIES];
     int count;
@@ -429,43 +513,22 @@ static bool mover_pushed_set_contains(const MoverPushedSet *set, b3BodyId id) {
     return false;
 }
 
-/* Applies a horizontal push impulse to a dynamic body the mover is walking
- * into, scaled by how fast the mover is closing on it along the contact
- * normal. Also writes the resulting velocity back into the entity's
- * RigidBody component immediately - otherwise sync_velocities_to_physics
- * overwrites this impulse with the stale pre-push velocity on the very
- * next physics tick and the push has no visible effect. */
 static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, const b3Plane *plane, b3Vec3 contactPoint, b3Vec3 moverVelocity, float moverMass, float moverFriction, float gravity, float dt) {
-    b3Vec3 normal = plane->normal; /* outward from the shape toward the mover */
-
+    b3Vec3 normal = plane->normal;
     b3Vec3 pushDir = {-normal.x, 0.0f, -normal.z};
     float pushDirLenSq = pushDir.x * pushDir.x + pushDir.z * pushDir.z;
-    if (pushDirLenSq < 1e-8f) return; /* mover is pushing straight up/down into it, ignore */
+    if (pushDirLenSq < 1e-8f) return;
 
     float invLen = 1.0f / sqrtf(pushDirLenSq);
     pushDir.x *= invLen;
     pushDir.z *= invLen;
 
     float approachSpeed = -(moverVelocity.x * normal.x + moverVelocity.z * normal.z);
-    if (approachSpeed <= 0.0f) return; /* mover isn't moving into the body */
-
-    /* Target speed tracks how fast the mover is actually walking into the
-     * body - no independent flat cap. Previously this was clamped to a
-     * constant 6 m/s regardless of the mover's own move speed, so a player
-     * moving faster than that kept re-colliding with a box that could never
-     * catch up, which read as the box "gliding" independently of input. */
+    if (approachSpeed <= 0.0f) return;
     float pushSpeed = approachSpeed * PHYSICS_MOVER_PUSH_SPEED_SCALE;
     float mass = b3Body_GetMass(bodyId);
     if (mass <= 0.0f) return;
 
-    /* This callback fires every tick the mover is touching the body, so we
-     * can't just add an impulse each time - that stacks unbounded velocity
-     * over a few frames of contact (feels like the box is on ice, since
-     * friction can't bleed off speed that high in one step). Instead, only
-     * push the box's velocity *up to* pushSpeed along the push direction.
-     * If it's already moving that fast or faster, don't add anything more -
-     * this makes the box track roughly the mover's speed instead of
-     * continuously accelerating while contact is held. */
     b3Vec3 currentVel = b3Body_GetLinearVelocity(bodyId);
     float currentSpeedAlongPush = currentVel.x * pushDir.x + currentVel.z * pushDir.z;
     float speedDelta = pushSpeed - currentSpeedAlongPush;
@@ -474,13 +537,6 @@ static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, 
     if (moverMass <= 0.0f) moverMass = PHYSICS_MOVER_DEFAULT_MASS;
     float reducedMass = (moverMass * mass) / (moverMass + mass);
 
-    /* The most horizontal force the mover can actually exert is bounded by
-     * how much its own footing can grip the ground: F = mu * m * g, the
-     * same static-friction limit that stops your feet slipping when you
-     * lean into something. That force applied over this tick is the most
-     * momentum we're allowed to hand the box - not a made-up acceleration
-     * constant, just the mover's own mass, its friction coefficient, and
-     * the world's actual gravity. */
     float maxPushForce  = moverFriction * moverMass * gravity;
     float maxImpulseMag = maxPushForce * dt;
 
@@ -529,11 +585,10 @@ static bool mover_plane_collect_cb(b3ShapeId shapeId, const b3PlaneResult *plane
     b3BodyId bodyId = b3Shape_GetBody(shapeId);
     if (b3Body_GetType(bodyId) == b3_dynamicBody
         && ctx->pushed
-        && !mover_pushed_set_contains(ctx->pushed, bodyId)) {
+        && !mover_pushed_set_contains(ctx->pushed, bodyId)
+        && ctx->pushed->count < PHYSICS_MOVER_PUSH_MAX_BODIES) {
 
-        if (ctx->pushed->count < PHYSICS_MOVER_PUSH_MAX_BODIES) {
-            ctx->pushed->ids[ctx->pushed->count++] = bodyId;
-        }
+        ctx->pushed->ids[ctx->pushed->count++] = bodyId;
         mover_push_dynamic_body(ctx->w, shapeId, bodyId, &plane->plane, plane->point, ctx->moverVelocity, ctx->moverMass, ctx->moverFriction, ctx->gravity, ctx->dt);
     }
 

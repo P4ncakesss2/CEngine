@@ -24,6 +24,27 @@ static void camera_forward(const FlyingCamera *cam, vec3 out) {
     out[2] = -cosf(cam->yaw) * cosf(cam->pitch);
 }
 
+static void camera_quat(const FlyingCamera *cam, versor out) {
+    vec3 up    = {0.0f, 1.0f, 0.0f};
+    vec3 right = {1.0f, 0.0f, 0.0f};
+
+    versor qYaw, qPitch;
+    glm_quatv(qYaw, cam->yaw, up);
+    glm_quatv(qPitch, cam->pitch, right);
+
+    glm_quat_mul(qYaw, qPitch, out);
+    glm_quat_normalize(out);
+}
+
+static void body_quat(b3BodyId bodyId, versor out) {
+    b3Quat bRot = b3Body_GetRotation(bodyId);
+    out[0] = bRot.v.x;
+    out[1] = bRot.v.y;
+    out[2] = bRot.v.z;
+    out[3] = bRot.s;
+    glm_quat_normalize(out);
+}
+
 static void grab_release(Ecs *ecs, Grabber *grabber) {
     if (!grabber->holding) return;
 
@@ -37,7 +58,7 @@ static void grab_release(Ecs *ecs, Grabber *grabber) {
     grabber->holding = false;
 }
 
-static void grab_try_pickup(PhysicsSystem *phys, Ecs *ecs, Transform *t, Grabber *grabber, const vec3 forward) {
+static void grab_try_pickup(PhysicsSystem *phys, Ecs *ecs, Transform *t, const FlyingCamera *cam, Grabber *grabber, const vec3 forward) {
     vec3 castTranslation = {
         forward[0] * grabber->maxGrabDistance,
         forward[1] * grabber->maxGrabDistance,
@@ -49,18 +70,27 @@ static void grab_try_pickup(PhysicsSystem *phys, Ecs *ecs, Transform *t, Grabber
         return;
     }
     if (!hit.hit) return;
-    if (!ECS_HAS(ecs, hit.entity, RigidBody) || !ECS_HAS(ecs, hit.entity, Collider)) return;
+    if (!ECS_HAS(ecs, hit.entity, RigidBody) || !ECS_HAS(ecs, hit.entity, Collider) || !ECS_HAS(ecs, hit.entity, Transform)) return;
 
     RigidBody *heldRb = ECS_GET(ecs, hit.entity, RigidBody);
     if (!heldRb || heldRb->type != RIGID_BODY_Dynamic) return;
 
-    grabber->holding          = true;
-    grabber->heldEntity       = (uint32_t)hit.entity;
+    grabber->holding           = true;
+    grabber->heldEntity        = (uint32_t)hit.entity;
     grabber->savedGravityScale = heldRb->gravityScale;
     heldRb->gravityScale = 0.0f;
+
+    versor camQuat, camQuatInv, objQuat;
+    camera_quat(cam, camQuat);
+    body_quat(heldRb->bodyId, objQuat);
+
+    glm_quat_copy(camQuat, camQuatInv);
+    glm_quat_inv(camQuatInv, camQuatInv);
+    glm_quat_mul(camQuatInv, objQuat, grabber->rotationOffset);
+    glm_quat_normalize(grabber->rotationOffset);
 }
 
-static void grab_update_held(Ecs *ecs, Transform *t, Grabber *grabber, const vec3 forward) {
+static void grab_update_held(Ecs *ecs, Transform *t, const FlyingCamera *cam, Grabber *grabber, const vec3 forward) {
     Entity held = (Entity)grabber->heldEntity;
 
     bool stillValid = ecs_entity_alive(ecs, held)
@@ -97,7 +127,45 @@ static void grab_update_held(Ecs *ecs, Transform *t, Grabber *grabber, const vec
     }
 
     glm_vec3_copy(desiredVel, heldRb->linearVelocity);
-    glm_vec3_zero(heldRb->angularVelocity);
+
+    versor camQuat, targetQuat, curQuat, curQuatInv, deltaQuat;
+    camera_quat(cam, camQuat);
+    glm_quat_mul(camQuat, grabber->rotationOffset, targetQuat);
+    glm_quat_normalize(targetQuat);
+
+    body_quat(heldRb->bodyId, curQuat);
+
+    if (glm_quat_dot(targetQuat, curQuat) < 0.0f) {
+        glm_vec4_scale(curQuat, -1.0f, curQuat);
+    }
+
+    glm_quat_copy(curQuat, curQuatInv);
+    glm_quat_inv(curQuatInv, curQuatInv);
+
+    glm_quat_mul(targetQuat, curQuatInv, deltaQuat);
+    glm_quat_normalize(deltaQuat);
+
+    if (deltaQuat[3] < 0.0f) {
+        glm_vec4_scale(deltaQuat, -1.0f, deltaQuat);
+    }
+
+    float angle = glm_quat_angle(deltaQuat);
+    if (angle > 1e-5f) {
+        vec3 axis;
+        glm_quat_axis(deltaQuat, axis);
+        glm_vec3_normalize(axis);
+
+        vec3 angVel;
+        glm_vec3_scale(axis, angle * grabber->rotationPullStrength, angVel);
+
+        float angSpeed = glm_vec3_norm(angVel);
+        if (angSpeed > grabber->maxRotationSpeed) {
+            glm_vec3_scale(angVel, grabber->maxRotationSpeed / angSpeed, angVel);
+        }
+        glm_vec3_copy(angVel, heldRb->angularVelocity);
+    } else {
+        glm_vec3_zero(heldRb->angularVelocity);
+    }
 }
 
 static void grab_system_update(void *sys_data, SystemManager *mgr, float dt) {
@@ -119,12 +187,12 @@ static void grab_system_update(void *sys_data, SystemManager *mgr, float dt) {
             if (grabber->holding) {
                 grab_release(ecs, grabber);
             } else {
-                grab_try_pickup(phys, ecs, t, grabber, forward);
+                grab_try_pickup(phys, ecs, t, cam, grabber, forward);
             }
         }
 
         if (grabber->holding) {
-            grab_update_held(ecs, t, grabber, forward);
+            grab_update_held(ecs, t, cam, grabber, forward);
         }
     }
 }

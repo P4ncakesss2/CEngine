@@ -7,6 +7,8 @@
 #define STATE_COMPUTING 1
 #define STATE_UPDATED   2
 
+#define TRANSFORM_MAX_DEPTH 256
+
 static void compute_local_to_world(const Transform *t, mat4 parent_mat, mat4 out) {
     mat4 local;
     glm_mat4_identity(local);
@@ -22,9 +24,20 @@ static void compute_local_to_world(const Transform *t, mat4 parent_mat, mat4 out
     glm_mat4_mul(parent_mat, local, out);
 }
 
-static void update_transform(Ecs *w, Entity e, uint8_t *state) {
+static void update_transform(Ecs *w, Entity e, uint8_t *state, int depth) {
     uint32_t idx = ECS_ENTITY_INDEX(e);
     if (state[idx] == STATE_UPDATED || state[idx] == STATE_COMPUTING) {
+        return;
+    }
+
+    if (depth >= TRANSFORM_MAX_DEPTH) {
+        state[idx] = STATE_UPDATED;
+        Transform *wt = ECS_GET(w, e, Transform);
+        if (wt) {
+            mat4 identity;
+            glm_mat4_identity(identity);
+            compute_local_to_world(wt, identity, wt->matrix);
+        }
         return;
     }
 
@@ -49,11 +62,14 @@ static void update_transform(Ecs *w, Entity e, uint8_t *state) {
 
     Parent *p = ECS_GET(w, e, Parent);
     if (p && ecs_entity_alive(w, p->entity)) {
-        update_transform(w, p->entity, state);
+        update_transform(w, p->entity, state, depth + 1);
 
-        Transform *pwt = ECS_GET(w, p->entity, Transform);
-        if (pwt) {
-            glm_mat4_copy(pwt->matrix, parent_mat);
+        uint32_t pidx = ECS_ENTITY_INDEX(p->entity);
+        if (state[pidx] == STATE_UPDATED) {
+            Transform *pwt = ECS_GET(w, p->entity, Transform);
+            if (pwt) {
+                glm_mat4_copy(pwt->matrix, parent_mat);
+            }
         }
     }
 
@@ -86,7 +102,7 @@ void transform_system_update(TransformSystem* sys, Ecs *w) {
     memset(sys->state, 0, w->capacity * sizeof(uint8_t));
 
     ECS_EACH(w, ECS_MASK(COMPONENT_Transform), e) {
-        update_transform(w, e, sys->state);
+        update_transform(w, e, sys->state, 0);
     }
 }
 

@@ -86,7 +86,9 @@ static void spawn_flying_camera(Ecs *ecs) {
         .holdDistance    = 2.0f,
         .pullStrength    = 12.0f,
         .maxPullSpeed    = 15.0f,
-        .maxGrabDistance = 4.0f,
+        .maxGrabDistance = 2.0f,
+       	.rotationPullStrength = 12.0f,
+       	.maxRotationSpeed = 15.0f,
     };
     ECS_ADD(ecs, e, Grabber, grabber);
 
