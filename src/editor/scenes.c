@@ -68,7 +68,7 @@ static void spawn_flying_camera(Ecs *ecs) {
 	Entity cameraEntity;
 	ecs_entity_create(ecs, &cameraEntity);
 	Transform t2 = { .scale = {1, 1, 1}, .position = {0,0.7,0} };
-    glm_mat4_identity(t.matrix);
+    glm_mat4_identity(t2.matrix);
     ECS_ADD(ecs, cameraEntity, Transform, t2);
 
     Camera cam = { 
