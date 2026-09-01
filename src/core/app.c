@@ -129,10 +129,12 @@ void app_update(EngineApp* app)
         fprintf(stderr, "scene_manager: base scene transition failed: %s\n", ecs_result_str(frame_scene_result));
     }
 
-    system_manager_update(&app->systems, app->deltaTime, app->fixedAccumulator / app->fixedDeltaTime);
     app->fixedAccumulator += app->deltaTime;
     while (app->fixedAccumulator >= app->fixedDeltaTime) {
         system_manager_fixed_update(&app->systems, app->fixedDeltaTime);
         app->fixedAccumulator -= app->fixedDeltaTime;
     }
+
+    float alpha = app->fixedAccumulator / app->fixedDeltaTime;
+    system_manager_update(&app->systems, app->deltaTime, alpha);
 }

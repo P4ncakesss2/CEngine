@@ -1,3 +1,4 @@
+#include "GLFW/glfw3.h"
 #include "app.h"
 #include <stdbool.h>
 #include <stdio.h>
@@ -44,7 +45,7 @@ int main(int argc, char **argv)
         .windowWidth = 1280,
         .windowHeight = 720,
         .windowTitle = "CEngine Game",
-        .windowVsync = false,
+        .windowVsync = true,
         .windowMSAA = MSAA_4X,
         .renderTarget = RENDER_TARGET_SWAPCHAIN,
         .imgui_draw_callback = &render_ui,

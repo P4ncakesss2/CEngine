@@ -540,20 +540,23 @@ static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider
     b3Vec3 totalDelta = safeDelta;
     b3Vec3 finalVelocity = to_b3vec3(velocity);
 
-    const int subIterations = 4;
+    const int subIterations = 5;
     PhysicsMoverPlaneContext planeCtx;
 
     for (int i = 0; i < subIterations; ++i) {
         planeCtx.count = 0;
         b3World_CollideMover(sys->world, b3Pos_zero, &capsule, filter, physics_system_mover_plane_cb, &planeCtx);
-
         if (planeCtx.count == 0) break;
 
         b3PlaneSolverResult solved = b3SolvePlanes(b3Vec3_zero, planeCtx.planes, planeCtx.count);
         finalVelocity = b3ClipVector(finalVelocity, planeCtx.planes, planeCtx.count);
-        capsule.center1 = b3Add(capsule.center1, solved.delta);
-        capsule.center2 = b3Add(capsule.center2, solved.delta);
-        totalDelta = b3Add(totalDelta, solved.delta);
+
+        float pushFraction = b3World_CastMover(sys->world, b3Pos_zero, &capsule, solved.delta, filter, NULL, NULL);
+        b3Vec3 safePush = b3MulSV(pushFraction, solved.delta);
+
+        capsule.center1 = b3Add(capsule.center1, safePush);
+        capsule.center2 = b3Add(capsule.center2, safePush);
+        totalDelta = b3Add(totalDelta, safePush);
     }
 
     velocity[0] = finalVelocity.x;
