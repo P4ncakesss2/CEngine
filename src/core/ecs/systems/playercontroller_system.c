@@ -20,11 +20,7 @@ static void apply_friction(vec3 velocity, float friction, float dt) {
         return;
     }
 
-    float drop = speed * friction * dt;
-    float newSpeed = speed - drop;
-    if (newSpeed < 0.0f) newSpeed = 0.0f;
-
-    float scale = newSpeed / speed;
+    float scale = expf(-friction * dt);
     velocity[0] *= scale;
     velocity[2] *= scale;
 }
