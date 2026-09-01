@@ -4,77 +4,6 @@
 #include <math.h>
 #include <float.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <sys/types.h>
-#include <sys/sysctl.h>
-#elif defined(__linux__)
-#include <unistd.h>
-#endif
-
-static uint32_t get_performance_core_count(void) {
-#if defined(_WIN32)
-    DWORD length = 0;
-    GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length);
-    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
-        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* info = 
-            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)malloc(length);
-        
-        if (GetLogicalProcessorInformationEx(RelationProcessorCore, info, &length)) {
-            uint32_t p_cores = 0;
-            uint32_t total_physical = 0;
-            char* ptr = (char*)info;
-            
-            while (ptr < ((char*)info) + length) {
-                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* pi = 
-                    (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)ptr;
-                
-                if (pi->Relationship == RelationProcessorCore) {
-                    total_physical++;
-                    // On Intel architectures, EfficiencyClass > 0 usually denotes P-cores
-                    if (pi->Processor.EfficiencyClass > 0) {
-                        p_cores++;
-                    }
-                }
-                ptr += pi->Size;
-            }
-            free(info);
-            // If p_cores is 0, CPU isn't hybrid (no E-cores). Return total physical cores.
-            return p_cores > 0 ? p_cores : (total_physical > 0 ? total_physical : 4);
-        }
-        free(info);
-    }
-    return 4;
-
-#elif defined(__APPLE__)
-    int count = 0;
-    size_t size = sizeof(count);
-    // Apple Silicon: Specifically requests Performance (P) cores
-    if (sysctlbyname("hw.perflevel0.physicalcpu", &count, &size, NULL, 0) == 0 && count > 0) {
-        return (uint32_t)count;
-    }
-    // Fallback: Intel Macs (Gets all physical cores, ignoring hyper-threading)
-    if (sysctlbyname("hw.physicalcpu", &count, &size, NULL, 0) == 0 && count > 0) {
-        return (uint32_t)count;
-    }
-    return 4;
-
-#elif defined(__linux__)
-    // Parsing /sys/devices/system/cpu to separate P and E cores in C requires
-    // deep file reading. This is a common heuristic: logical cores divided by 2 
-    // to account for standard hyper-threading.
-    long logical_cores = sysconf(_SC_NPROCESSORS_ONLN);
-    if (logical_cores > 2) {
-        return (uint32_t)(logical_cores / 2);
-    }
-    return logical_cores > 0 ? (uint32_t)logical_cores : 4;
-
-#else
-    return 4; // Fallback for unknown OS
-#endif
-}
-
 #define PHYSICS_FIXED_DT     (1.0f / 60.0f)
 #define PHYSICS_MAX_SUBSTEPS 5
 
@@ -287,12 +216,12 @@ static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
         b3BodyDef bodyDef = b3DefaultBodyDef();
         bodyDef.position = to_b3pos(worldPos);
         bodyDef.rotation = worldRot;
-        bodyDef.linearVelocity  = to_b3vec3(rb->initialLinearVelocity);
-        bodyDef.angularVelocity = to_b3vec3(rb->initialAngularVelocity);
+        bodyDef.linearVelocity  = to_b3vec3(rb->linearVelocity);
+        bodyDef.angularVelocity = to_b3vec3(rb->angularVelocity);
         bodyDef.gravityScale    = rb->gravityScale;
         bodyDef.linearDamping   = rb->linearDamping;
         bodyDef.angularDamping  = rb->angularDamping;
-        bodyDef.isBullet        = rb->isBullet;
+        bodyDef.isBullet        = false; 
 
         bodyDef.motionLocks.angularX = rb->angularMotionLocks.x;
         bodyDef.motionLocks.angularY = rb->angularMotionLocks.y;
@@ -315,9 +244,6 @@ static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
         rb->created = true;
         t->worldOverrideActive = false;
 
-        glm_vec3_copy(rb->initialLinearVelocity, rb->linearVelocity);
-        glm_vec3_copy(rb->initialAngularVelocity, rb->angularVelocity);
-
         if (!bodies_reserve(sys, sys->bodyCount + 1)) {
             b3DestroyBody(rb->bodyId);
             rb->created = false;
@@ -332,18 +258,6 @@ static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
         sys->bodyCount++;
 
         create_collider(rb, ECS_GET(w, e, Collider), e);
-    }
-}
-
-
-static void sync_velocities_to_physics(PhysicsSystem *sys, Ecs *w) {
-    (void)sys;
-    ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody), e) {
-        RigidBody *rb = ECS_GET(w, e, RigidBody);
-        if (!rb || !rb->created || rb->type == RIGID_BODY_Static) continue;
-
-        b3Body_SetLinearVelocity(rb->bodyId, to_b3vec3(rb->linearVelocity));
-        b3Body_SetAngularVelocity(rb->bodyId, to_b3vec3(rb->angularVelocity));
     }
 }
 
@@ -434,7 +348,6 @@ void physics_system_init(PhysicsSystem *sys) {
     sys->fixedDt = PHYSICS_FIXED_DT;
 
     b3WorldDef def = b3DefaultWorldDef();
-    def.workerCount = get_performance_core_count();
     sys->world = b3CreateWorld(&def);
     if (B3_IS_NULL(sys->world)) {
         return;
@@ -458,7 +371,13 @@ void physics_system_update(PhysicsSystem *sys, Ecs *w, float dt) {
     if (B3_IS_NULL(sys->world)) return;
 
     spawn_new_bodies(sys, w);
-    sync_velocities_to_physics(sys, w);
+    ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody), e) {
+        RigidBody *rb = ECS_GET(w, e, RigidBody);
+        if (!rb || !rb->created || rb->type == RIGID_BODY_Static) continue;
+
+        b3Body_SetLinearVelocity(rb->bodyId, to_b3vec3(rb->linearVelocity));
+        b3Body_SetAngularVelocity(rb->bodyId, to_b3vec3(rb->angularVelocity));
+    }
 
     sys->accumulator += dt;
     float maxAccum = sys->fixedDt * PHYSICS_MAX_SUBSTEPS;
@@ -493,89 +412,13 @@ static Entity entity_from_shape(b3ShapeId shapeId) {
 #define PHYSICS_MOVER_MAX_ITERATIONS 4
 #define PHYSICS_MOVER_SETTLE_EPS_SQ  (1e-8f)
 
-#define PHYSICS_MOVER_PUSH_MAX_BODIES   8
-#define PHYSICS_MOVER_PUSH_SPEED_SCALE  1.0f
-#define PHYSICS_MOVER_DEFAULT_MASS      20.0f
-
-typedef struct {
-    b3BodyId ids[PHYSICS_MOVER_PUSH_MAX_BODIES];
-    int count;
-} MoverPushedSet;
-
 static bool body_id_equals(b3BodyId a, b3BodyId b) {
     return memcmp(&a, &b, sizeof(b3BodyId)) == 0;
-}
-
-static bool mover_pushed_set_contains(const MoverPushedSet *set, b3BodyId id) {
-    for (int i = 0; i < set->count; i++) {
-        if (body_id_equals(set->ids[i], id)) return true;
-    }
-    return false;
-}
-
-static void mover_push_dynamic_body(Ecs *w, b3ShapeId shapeId, b3BodyId bodyId, const b3Plane *plane, b3Vec3 contactPoint, b3Vec3 *moverVelocity, float moverMass, float moverFriction, float gravity, float dt) {
-    b3Vec3 normal = plane->normal;
-    b3Vec3 pushDir = {-normal.x, 0.0f, -normal.z};
-    float pushDirLenSq = pushDir.x * pushDir.x + pushDir.z * pushDir.z;
-    if (pushDirLenSq < 1e-8f) return;
-
-    float invLen = 1.0f / sqrtf(pushDirLenSq);
-    pushDir.x *= invLen;
-    pushDir.z *= invLen;
-
-    float approachSpeed = -(moverVelocity->x * normal.x + moverVelocity->z * normal.z);
-    if (approachSpeed <= 0.0f) return;
-    float pushSpeed = approachSpeed * PHYSICS_MOVER_PUSH_SPEED_SCALE;
-    float mass = b3Body_GetMass(bodyId);
-    if (mass <= 0.0f) return;
-
-    b3Vec3 currentVel = b3Body_GetLinearVelocity(bodyId);
-    float currentSpeedAlongPush = currentVel.x * pushDir.x + currentVel.z * pushDir.z;
-    float speedDelta = pushSpeed - currentSpeedAlongPush;
-    if (speedDelta <= 0.0f) return;
-
-    if (moverMass <= 0.0f) moverMass = PHYSICS_MOVER_DEFAULT_MASS;
-    float reducedMass = (moverMass * mass) / (moverMass + mass);
-
-    float maxPushForce  = moverFriction * moverMass * gravity;
-    float maxImpulseMag = maxPushForce * dt;
-
-    float desiredImpulseMag = speedDelta * reducedMass;
-    float appliedImpulseMag = fminf(desiredImpulseMag, maxImpulseMag);
-    if (appliedImpulseMag <= 0.0f) return;
-
-    b3Vec3 impulse = {pushDir.x * appliedImpulseMag, 0.0f, pushDir.z * appliedImpulseMag};
-    b3Body_ApplyLinearImpulse(bodyId, impulse, contactPoint, true);
-    moverVelocity->x -= impulse.x / moverMass;
-    moverVelocity->z -= impulse.z / moverMass;
-
-    if (!w) return;
-    Entity e = entity_from_shape(shapeId);
-    if (!ecs_entity_alive(w, e)) return;
-    RigidBody *rb = ECS_GET(w, e, RigidBody);
-    if (!rb) return;
-
-    b3Vec3 newVel = b3Body_GetLinearVelocity(bodyId);
-    rb->linearVelocity[0] = newVel.x;
-    rb->linearVelocity[1] = newVel.y;
-    rb->linearVelocity[2] = newVel.z;
-
-    b3Vec3 newAngVel = b3Body_GetAngularVelocity(bodyId);
-    rb->angularVelocity[0] = newAngVel.x;
-    rb->angularVelocity[1] = newAngVel.y;
-    rb->angularVelocity[2] = newAngVel.z;
 }
 
 typedef struct {
     b3CollisionPlane planes[PHYSICS_MOVER_MAX_PLANES];
     int count;
-    b3Vec3 *moverVelocity;
-    float moverMass;
-    float moverFriction;
-    float gravity;
-    float dt;
-    MoverPushedSet *pushed;
-    Ecs *w;
 } MoverPlaneCollectContext;
 
 static bool mover_plane_collect_cb(b3ShapeId shapeId, const b3PlaneResult *plane, int planeCount, void *context) {
@@ -588,17 +431,6 @@ static bool mover_plane_collect_cb(b3ShapeId shapeId, const b3PlaneResult *plane
     out->pushLimit     = FLT_MAX;
     out->push          = 0.0f;
     out->clipVelocity  = true;
-
-    b3BodyId bodyId = b3Shape_GetBody(shapeId);
-    if (b3Body_GetType(bodyId) == b3_dynamicBody
-        && ctx->pushed
-        && !mover_pushed_set_contains(ctx->pushed, bodyId)
-        && ctx->pushed->count < PHYSICS_MOVER_PUSH_MAX_BODIES) {
-
-        ctx->pushed->ids[ctx->pushed->count++] = bodyId;
-        mover_push_dynamic_body(ctx->w, shapeId, bodyId, &plane->plane, plane->point, ctx->moverVelocity, ctx->moverMass, ctx->moverFriction, ctx->gravity, ctx->dt);
-    }
-
     return true;
 }
 
@@ -634,28 +466,22 @@ static bool mover_depenetrate(Ecs *w, b3WorldId world, const Collider *collider,
                                vec3 origin, b3Capsule *mover,
                                b3CollisionPlane *touchedPlanes, int *touchedCount,
                                b3Vec3 *moverVelocity, float moverMass, float moverFriction, float gravity,
-                               float dt, MoverPushedSet *pushed) {
+                               float dt) {
     b3Pos zero = {0.0f, 0.0f, 0.0f};
     bool foundAny = false;
 
     for (int iter = 0; iter < PHYSICS_MOVER_MAX_ITERATIONS; iter++) {
         MoverPlaneCollectContext ctx = {0};
-        ctx.moverVelocity  = moverVelocity;
-        ctx.moverMass      = moverMass;
-        ctx.moverFriction  = moverFriction;
-        ctx.gravity        = gravity;
-        ctx.dt             = dt;
-        ctx.pushed         = pushed;
-        ctx.w              = w;
         b3World_CollideMover(world, zero, mover, filter, mover_plane_collect_cb, &ctx);
         if (ctx.count == 0) break;
         foundAny = true;
+
+        b3PlaneSolverResult result = b3SolvePlanes((b3Vec3){0.0f, 0.0f, 0.0f}, ctx.planes, ctx.count);
 
         for (int i = 0; i < ctx.count && *touchedCount < PHYSICS_MOVER_MAX_PLANES; i++) {
             touchedPlanes[(*touchedCount)++] = ctx.planes[i];
         }
 
-        b3PlaneSolverResult result = b3SolvePlanes((b3Vec3){0.0f, 0.0f, 0.0f}, ctx.planes, ctx.count);
         origin[0] += result.delta.x;
         origin[1] += result.delta.y;
         origin[2] += result.delta.z;
@@ -687,11 +513,8 @@ void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *colli
     float moverFriction = collider->friction;
     float gravity = sys->gravity;
 
-    MoverPushedSet pushed = {0};
-
     b3CollisionPlane touchedPlanes[PHYSICS_MOVER_MAX_PLANES];
     int touchedCount = 0;
-    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, &moverVelocity, moverMass, moverFriction, gravity, dt, &pushed);
     b3Vec3 translation = to_b3vec3((vec3){velocity[0] * dt, velocity[1] * dt, velocity[2] * dt});
 
     float fraction = b3World_CastMover(sys->world, zero, &mover, translation, filter, NULL, NULL);
@@ -699,16 +522,15 @@ void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *colli
     origin[1] += velocity[1] * dt * fraction;
     origin[2] += velocity[2] * dt * fraction;
     mover_capsule_from_collider(collider, origin, &mover);
-    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, &moverVelocity, moverMass, moverFriction, gravity, dt, &pushed);
-
+    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, &moverVelocity, moverMass, moverFriction, gravity, dt);
+    
     b3Vec3 clipped = touchedCount > 0 ? b3ClipVector(moverVelocity, touchedPlanes, touchedCount) : moverVelocity;
     velocity[0] = clipped.x;
     velocity[1] = clipped.y;
     velocity[2] = clipped.z;
 }
 
-bool physics_system_raycast(PhysicsSystem *sys, Ecs *w, vec3 origin, vec3 translation,
-                             uint64_t categoryMask, PhysicsRaycastHit *out) {
+bool physics_system_raycast(PhysicsSystem *sys, Ecs *w, vec3 origin, vec3 translation, uint64_t categoryMask, PhysicsRaycastHit *out) {
     memset(out, 0, sizeof(*out));
     if (!sys || !w || B3_IS_NULL(sys->world)) return false;
 

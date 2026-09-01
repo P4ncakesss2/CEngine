@@ -25,7 +25,7 @@ static Entity spawn_node(Ecs *w, const char *name, vec3 pos, vec3 rot, vec3 scal
 }
 
 static Entity spawn_dynamic_box(Ecs *w, const char *name, vec3 pos, vec3 rot, vec3 halfExtents,
-                                 float density, vec3 initialVelocity, bool isBullet)
+                                 float density, vec3 initialVelocity)
 {
 	vec3 scale = {1.0f, 1.0f, 1.0f};
 	Entity box = spawn_node(w, name, pos, rot, scale);
@@ -41,8 +41,7 @@ static Entity spawn_dynamic_box(Ecs *w, const char *name, vec3 pos, vec3 rot, ve
 	RigidBody boxBody = {0};
 	boxBody.type = RIGID_BODY_Dynamic;
 	boxBody.gravityScale = 1.0f;
-	glm_vec3_copy(initialVelocity, boxBody.initialLinearVelocity);
-	boxBody.isBullet = isBullet;
+	glm_vec3_copy(initialVelocity, boxBody.linearVelocity);
 	ECS_ADD(w, box, RigidBody, boxBody);
 
 	Collider boxCollider = {0};
@@ -86,16 +85,6 @@ static void spawn_flying_camera(Ecs *ecs) {
         .jumpForce       = 4.5f,
     };
     ECS_ADD(ecs, e, PlayerController, player);
-
-    Grabber grabber = {
-        .holdDistance    = 2.0f,
-        .pullStrength    = 12.0f,
-        .maxPullSpeed    = 15.0f,
-        .maxGrabDistance = 2.0f,
-       	.rotationPullStrength = 12.0f,
-       	.maxRotationSpeed = 15.0f,
-    };
-    ECS_ADD(ecs, e, Grabber, grabber);
 
     Collider col = { .type = COLLIDER_Capsule };
     col.capsule.radius = 0.3f;
@@ -157,7 +146,7 @@ void scene_build_level1(Ecs *w)
 			vec3 pos = {px, py, 0.0f};
 
 			snprintf(nameBuf, sizeof(nameBuf), "PyramidBox_%d", boxIndex);
-			spawn_dynamic_box(w, nameBuf, pos, GLM_VEC3_ZERO, boxHalfExtents, 1.0f, GLM_VEC3_ZERO, false);
+			spawn_dynamic_box(w, nameBuf, pos, GLM_VEC3_ZERO, boxHalfExtents, 1.0f, GLM_VEC3_ZERO);
 
 			boxIndex++;
 		}
@@ -170,5 +159,5 @@ void scene_build_level1(Ecs *w)
 		12.0f
 	};
 	vec3 projectileVelocity = {0.0f, 0.0f, -35.0f};
-	spawn_dynamic_box(w, "Cannonball", projectilePos, GLM_VEC3_ZERO, boxHalfExtents, 15.0f, projectileVelocity, true);
+	spawn_dynamic_box(w, "Cannonball", projectilePos, GLM_VEC3_ZERO, boxHalfExtents, 15.0f, projectileVelocity);
 }

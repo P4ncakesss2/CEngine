@@ -267,12 +267,6 @@ EcsResult ecs_entity_clone(Ecs *w, Entity src, Entity *out) {
     uint32_t src_idx = ECS_ENTITY_INDEX(src);
     uint32_t dst_idx = ECS_ENTITY_INDEX(dst);
 
-    /* A cloned entity is a fresh, free-standing entity: it does NOT
-     * inherit the source's scene-instance bookkeeping (instanceId /
-     * instanceIsNested stay at their reset defaults from
-     * ecs_entity_create above), even if the source happened to belong
-     * to an instantiated scene. */
-
 #define COMPONENT(Name)                                                          \
     if ((w->mask[src_idx].bits[ECS_WORD_OF(Name)] >> ECS_BIT_OF(Name)) & 1u) {   \
         w->Name##_data[dst_idx] = w->Name##_data[src_idx];                       \
@@ -346,12 +340,6 @@ EcsResult ecs_serialize(const Ecs *w, uint8_t **out_data, size_t *out_size) {
     WB(&w->capacity, sizeof(w->capacity), 1);
     WB(&w->high_water, sizeof(w->high_water), 1);
 
-    /* Entities belonging to a nested/instanced scene (instanceIsNested == true)
-     * are not authored here -- they were spawned by expanding another scene's
-     * Scene-component reference. Only the count of entities we actually own
-     * and are about to write below is saved; the nested ones are re-instantiated
-     * from their source scene asset at load time, so edits made to that source
-     * scene are always picked up instead of a stale baked copy. */
     uint32_t saved_count = 0;
     for (uint32_t i = 0; i < w->alive_count; i++) {
         uint32_t idx = ECS_ENTITY_INDEX(w->dense[i]);

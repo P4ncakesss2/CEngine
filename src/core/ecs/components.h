@@ -78,15 +78,11 @@ typedef struct {
     float linearDamping;
     float angularDamping;
 
-    vec3  initialLinearVelocity;
-    vec3  initialAngularVelocity;
-    
     MotionLocks angularMotionLocks;
     MotionLocks linearMotionLocks;
 
     vec3  linearVelocity;
     vec3  angularVelocity;
-    bool isBullet;
 
     b3BodyId bodyId;
     bool     created;
@@ -105,11 +101,10 @@ typedef struct {
 
     float density;
     float mass;
-
     float friction;
     float restitution;
-    bool isSensor;
 
+    bool isSensor;
     bool enableContactEvents;
     bool enableHitEvents;
 
@@ -124,11 +119,9 @@ typedef struct {
         struct {
             vec3 halfExtents;
         } box;
-
         struct {
             float radius;
         } sphere;
-
         struct {
             float radius;
             float height;
@@ -150,18 +143,4 @@ typedef struct {
     bool  wasGrounded;
 } PlayerController;
 
-typedef struct {
-    bool holding;
-    Entity heldEntity;
-
-    float holdDistance; 
-    float pullStrength;
-    float maxPullSpeed;
-    float maxGrabDistance;
-    float savedGravityScale; 
-
-    versor rotationOffset;
-    float rotationPullStrength;
-    float maxRotationSpeed;
-} Grabber;
 #endif
