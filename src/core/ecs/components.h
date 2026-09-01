@@ -4,7 +4,6 @@
 #include <cglm/cglm.h>
 #include "stdbool.h"
 #include "asset/asset.h"
-#include <box3d/box3d.h>
 
 typedef uint32_t Entity;
 
@@ -83,9 +82,6 @@ typedef struct {
 
     vec3  linearVelocity;
     vec3  angularVelocity;
-
-    b3BodyId bodyId;
-    bool     created;
 } RigidBody;
 
 typedef struct {
@@ -114,9 +110,6 @@ typedef struct {
     uint64_t categoryBits;
     uint64_t maskBits;
     int32_t  groupIndex;
-
-    b3ShapeId shapeId;
-    bool created;
 
     union {
         struct {

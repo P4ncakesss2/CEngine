@@ -8,9 +8,10 @@
 #include <stdint.h>
 
 typedef struct {
-    Entity   entity;
-    b3BodyId bodyId;
-    bool     isStatic;
+    Entity    entity;
+    b3BodyId  bodyId;
+    b3ShapeId shapeId;
+    bool      isStatic;
 
     b3Vec3 prevPos;
     b3Quat prevRot;
@@ -32,10 +33,15 @@ typedef struct PhysicsSystem {
     uint32_t          bodyCapacity;
     int subStepCount;
 
+    uint32_t *entityToBody;
+    uint32_t  entityToBodyCapacity;
+
     float fixedDt;
     float accumulator;
     float gravity; 
 } PhysicsSystem;
+
+#define PHYSICS_NO_BODY UINT32_MAX
 
 void physics_system_init(PhysicsSystem *sys);
 void physics_system_free(PhysicsSystem *sys);

@@ -148,8 +148,8 @@ static float collider_volume(const Collider *col) {
     }
 }
 
-static void create_collider(RigidBody *rb, Collider *col, Entity e) {
-    if (!col || col->created) return;
+static b3ShapeId create_collider(PhysicsSystem *sys, b3BodyId bodyId, const Collider *col, Entity e) {
+    if (!sys || B3_IS_NULL(bodyId) || !col) return b3_nullShapeId;
 
     b3ShapeDef shapeDef = b3DefaultShapeDef();
     shapeDef.density                  = col->density;
@@ -164,9 +164,7 @@ static void create_collider(RigidBody *rb, Collider *col, Entity e) {
 
     if (col->mass > 0.0f) {
         float volume = collider_volume(col);
-        if (volume > 0.0f) {
-            shapeDef.density = col->mass / volume;
-        }
+        if (volume > 0.0f) shapeDef.density = col->mass / volume;
     }
 
     switch (col->type) {
@@ -175,41 +173,62 @@ static void create_collider(RigidBody *rb, Collider *col, Entity e) {
                                                  col->box.halfExtents[1],
                                                  col->box.halfExtents[2],
                                                  to_b3vec3(col->offset));
-            col->shapeId = b3CreateHullShape(rb->bodyId, &shapeDef, &hull.base);
-            break;
+            return b3CreateHullShape(bodyId, &shapeDef, &hull.base);
         }
         case COLLIDER_Sphere: {
             b3Sphere sphere;
             sphere.center = to_b3vec3(col->offset);
             sphere.radius = col->sphere.radius;
-            col->shapeId = b3CreateSphereShape(rb->bodyId, &shapeDef, &sphere);
-            break;
+            return b3CreateSphereShape(bodyId, &shapeDef, &sphere);
         }
         case COLLIDER_Capsule: {
             float halfHeight = col->capsule.height * 0.5f;
             vec3 c1 = {col->offset[0], col->offset[1] - halfHeight, col->offset[2]};
             vec3 c2 = {col->offset[0], col->offset[1] + halfHeight, col->offset[2]};
-
             b3Capsule capsule;
             capsule.center1 = to_b3vec3(c1);
             capsule.center2 = to_b3vec3(c2);
             capsule.radius  = col->capsule.radius;
-            col->shapeId = b3CreateCapsuleShape(rb->bodyId, &shapeDef, &capsule);
-            break;
+            return b3CreateCapsuleShape(bodyId, &shapeDef, &capsule);
         }
         default:
-            return;
+            return b3_nullShapeId;
     }
+}
 
-    col->created = true;
-    col->mass    = b3Body_GetMass(rb->bodyId);
+static int32_t find_body_index(const PhysicsSystem *sys, Entity e) {
+    if (!sys) return -1;
+    if (e < sys->entityToBodyCapacity) {
+        uint32_t index = sys->entityToBody[e];
+        if (index != PHYSICS_NO_BODY && index < sys->bodyCount && sys->bodies[index].entity == e)
+            return (int32_t)index;
+    }
+    for (uint32_t i = 0; i < sys->bodyCount; ++i)
+        if (sys->bodies[i].entity == e) return (int32_t)i;
+    return -1;
+}
+
+static bool entity_to_body_reserve(PhysicsSystem *sys, Entity e) {
+    if (e < sys->entityToBodyCapacity) return true;
+    uint32_t new_cap = sys->entityToBodyCapacity ? sys->entityToBodyCapacity : 64;
+    while (new_cap <= e) {
+        if (new_cap > UINT32_MAX / 2) { new_cap = e + 1; break; }
+        new_cap *= 2;
+    }
+    uint32_t *p = realloc(sys->entityToBody, new_cap * sizeof(uint32_t));
+    if (!p) return false;
+    for (uint32_t i = sys->entityToBodyCapacity; i < new_cap; ++i) p[i] = PHYSICS_NO_BODY;
+    sys->entityToBody = p;
+    sys->entityToBodyCapacity = new_cap;
+    return true;
 }
 
 static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
-    ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody, COMPONENT_Transform), e) {
+    ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody, COMPONENT_Transform, COMPONENT_Collider), e) {
         RigidBody *rb = ECS_GET(w, e, RigidBody);
         Transform *t  = ECS_GET(w, e, Transform);
-        if (!rb || !t || rb->created) continue;
+        Collider *col = ECS_GET(w, e, Collider);
+        if (!rb || !t || !col || find_body_index(sys, e) >= 0) continue;
 
         vec3 worldPos;
         b3Quat worldRot;
@@ -223,12 +242,10 @@ static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
         bodyDef.gravityScale    = rb->gravityScale;
         bodyDef.linearDamping   = rb->linearDamping;
         bodyDef.angularDamping  = rb->angularDamping;
-        bodyDef.isBullet        = false; 
-
+        bodyDef.isBullet        = false;
         bodyDef.motionLocks.angularX = rb->angularMotionLocks.x;
         bodyDef.motionLocks.angularY = rb->angularMotionLocks.y;
         bodyDef.motionLocks.angularZ = rb->angularMotionLocks.z;
-
         bodyDef.motionLocks.linearX = rb->linearMotionLocks.x;
         bodyDef.motionLocks.linearY = rb->linearMotionLocks.y;
         bodyDef.motionLocks.linearZ = rb->linearMotionLocks.z;
@@ -237,29 +254,28 @@ static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
             case RIGID_BODY_Static:    bodyDef.type = b3_staticBody;    break;
             case RIGID_BODY_Kinematic: bodyDef.type = b3_kinematicBody; break;
             case RIGID_BODY_Dynamic:   bodyDef.type = b3_dynamicBody;   break;
+            default: continue;
         }
 
-        rb->bodyId = b3CreateBody(sys->world, &bodyDef);
-        if (B3_IS_NULL(rb->bodyId)) {
+        b3BodyId bodyId = b3CreateBody(sys->world, &bodyDef);
+        if (B3_IS_NULL(bodyId)) continue;
+        b3ShapeId shapeId = create_collider(sys, bodyId, col, e);
+        if (B3_IS_NULL(shapeId)) { b3DestroyBody(bodyId); continue; }
+
+        if (!bodies_reserve(sys, sys->bodyCount + 1) || !entity_to_body_reserve(sys, e)) {
+            b3DestroyBody(bodyId);
             continue;
         }
-        rb->created = true;
+
+        uint32_t index = sys->bodyCount++;
+        sys->bodies[index].entity   = e;
+        sys->bodies[index].bodyId   = bodyId;
+        sys->bodies[index].shapeId  = shapeId;
+        sys->bodies[index].isStatic = (rb->type == RIGID_BODY_Static);
+        sys->bodies[index].prevPos  = to_b3vec3(worldPos);
+        sys->bodies[index].prevRot  = worldRot;
+        sys->entityToBody[e] = index;
         t->worldOverrideActive = false;
-
-        if (!bodies_reserve(sys, sys->bodyCount + 1)) {
-            b3DestroyBody(rb->bodyId);
-            rb->created = false;
-            continue;
-        }
-
-        sys->bodies[sys->bodyCount].entity   = e;
-        sys->bodies[sys->bodyCount].bodyId   = rb->bodyId;
-        sys->bodies[sys->bodyCount].isStatic = (rb->type == RIGID_BODY_Static);
-        sys->bodies[sys->bodyCount].prevPos  = to_b3vec3(worldPos);
-        sys->bodies[sys->bodyCount].prevRot  = worldRot;
-        sys->bodyCount++;
-
-        create_collider(rb, ECS_GET(w, e, Collider), e);
     }
 }
 
@@ -271,57 +287,50 @@ static void b3quat_to_versor(b3Quat q, versor out) {
 }
 
 static void writeback_and_reap(PhysicsSystem *sys, Ecs *w) {
-    float alpha = sys->accumulator / sys->fixedDt;
+    float alpha = sys->fixedDt > 0.0f ? sys->accumulator / sys->fixedDt : 0.0f;
+    if (alpha < 0.0f) alpha = 0.0f;
+    if (alpha > 1.0f) alpha = 1.0f;
 
     uint32_t writeIdx = 0;
     for (uint32_t i = 0; i < sys->bodyCount; i++) {
         PhysicsBodyEntry *entry = &sys->bodies[i];
-
         bool stillOwnsBody = ecs_entity_alive(w, entry->entity)
                            && ECS_HAS(w, entry->entity, RigidBody)
-                           && ECS_HAS(w, entry->entity, Collider);
+                           && ECS_HAS(w, entry->entity, Collider)
+                           && ECS_HAS(w, entry->entity, Transform);
         if (!stillOwnsBody) {
             b3DestroyBody(entry->bodyId);
-
-            if (ecs_entity_alive(w, entry->entity)) {
-                RigidBody *rb = ECS_GET(w, entry->entity, RigidBody);
-                if (rb) {
-                    rb->created = false;
-                    rb->bodyId  = b3_nullBodyId;
-                }
-                Collider *col = ECS_GET(w, entry->entity, Collider);
-                if (col) {
-                    col->created = false;
-                    col->shapeId = b3_nullShapeId;
-                }
-            }
+            if (entry->entity < sys->entityToBodyCapacity)
+                sys->entityToBody[entry->entity] = PHYSICS_NO_BODY;
             continue;
         }
-        sys->bodies[writeIdx++] = *entry;
 
-        if (entry->isStatic) continue;
+        if (writeIdx != i) {
+            sys->bodies[writeIdx] = *entry;
+            if (entry->entity < sys->entityToBodyCapacity)
+                sys->entityToBody[entry->entity] = writeIdx;
+        }
+        PhysicsBodyEntry *dst = &sys->bodies[writeIdx++];
+        if (dst->isStatic) continue;
 
-        RigidBody *rb = ECS_GET(w, entry->entity, RigidBody);
-        Transform *t  = ECS_GET(w, entry->entity, Transform);
+        RigidBody *rb = ECS_GET(w, dst->entity, RigidBody);
+        Transform *t  = ECS_GET(w, dst->entity, Transform);
         if (t) {
-            b3WorldTransform xf = b3Body_GetTransform(entry->bodyId);
-
-            b3Vec3 blendedPos;
-            blendedPos.x = entry->prevPos.x + (xf.p.x - entry->prevPos.x) * alpha;
-            blendedPos.y = entry->prevPos.y + (xf.p.y - entry->prevPos.y) * alpha;
-            blendedPos.z = entry->prevPos.z + (xf.p.z - entry->prevPos.z) * alpha;
-
+            b3WorldTransform xf = b3Body_GetTransform(dst->bodyId);
+            b3Vec3 blendedPos = {
+                dst->prevPos.x + (xf.p.x - dst->prevPos.x) * alpha,
+                dst->prevPos.y + (xf.p.y - dst->prevPos.y) * alpha,
+                dst->prevPos.z + (xf.p.z - dst->prevPos.z) * alpha
+            };
             versor fromQ, toQ, blendedQ;
-            b3quat_to_versor(entry->prevRot, fromQ);
+            b3quat_to_versor(dst->prevRot, fromQ);
             b3quat_to_versor(xf.q, toQ);
             glm_quat_slerp(fromQ, toQ, alpha, blendedQ);
-
             mat4 bodyWorld;
             glm_quat_mat4(blendedQ, bodyWorld);
             bodyWorld[3][0] = (float)blendedPos.x;
             bodyWorld[3][1] = (float)blendedPos.y;
             bodyWorld[3][2] = (float)blendedPos.z;
-
             t->position[0] = bodyWorld[3][0];
             t->position[1] = bodyWorld[3][1];
             t->position[2] = bodyWorld[3][2];
@@ -329,16 +338,11 @@ static void writeback_and_reap(PhysicsSystem *sys, Ecs *w) {
             glm_mat4_copy(bodyWorld, t->worldOverride);
             t->worldOverrideActive = true;
         }
-
         if (rb) {
-            b3Vec3 lin = b3Body_GetLinearVelocity(entry->bodyId);
-            b3Vec3 ang = b3Body_GetAngularVelocity(entry->bodyId);
-            rb->linearVelocity[0]  = lin.x;
-            rb->linearVelocity[1]  = lin.y;
-            rb->linearVelocity[2]  = lin.z;
-            rb->angularVelocity[0] = ang.x;
-            rb->angularVelocity[1] = ang.y;
-            rb->angularVelocity[2] = ang.z;
+            b3Vec3 lin = b3Body_GetLinearVelocity(dst->bodyId);
+            b3Vec3 ang = b3Body_GetAngularVelocity(dst->bodyId);
+            rb->linearVelocity[0] = lin.x; rb->linearVelocity[1] = lin.y; rb->linearVelocity[2] = lin.z;
+            rb->angularVelocity[0] = ang.x; rb->angularVelocity[1] = ang.y; rb->angularVelocity[2] = ang.z;
         }
     }
     sys->bodyCount = writeIdx;
@@ -365,6 +369,7 @@ void physics_system_free(PhysicsSystem *sys) {
         b3DestroyWorld(sys->world);
     }
     free(sys->bodies);
+    free(sys->entityToBody);
     memset(sys, 0, sizeof(PhysicsSystem));
 }
 
@@ -527,10 +532,12 @@ void physics_system_update(PhysicsSystem *sys, Ecs *w, float dt) {
     spawn_new_bodies(sys, w);
     ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody), e) {
         RigidBody *rb = ECS_GET(w, e, RigidBody);
-        if (!rb || !rb->created || rb->type == RIGID_BODY_Static) continue;
-
-        b3Body_SetLinearVelocity(rb->bodyId, to_b3vec3(rb->linearVelocity));
-        b3Body_SetAngularVelocity(rb->bodyId, to_b3vec3(rb->angularVelocity));
+        if (!rb || rb->type == RIGID_BODY_Static) continue;
+        int32_t bodyIndex = find_body_index(sys, e);
+        if (bodyIndex < 0) continue;
+        b3BodyId bodyId = sys->bodies[bodyIndex].bodyId;
+        b3Body_SetLinearVelocity(bodyId, to_b3vec3(rb->linearVelocity));
+        b3Body_SetAngularVelocity(bodyId, to_b3vec3(rb->angularVelocity));
     }
 
     sys->accumulator += dt;
