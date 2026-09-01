@@ -54,10 +54,11 @@ static void player_controller_update(void *sys_data, SystemManager *mgr, float d
 
     PhysicsSystem *phys = SYSTEM_GET(mgr, Physics);
 
-    ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform, COMPONENT_Collider), e) {
+    ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform, COMPONENT_Collider, COMPONENT_CharacterMover), e) {
         PlayerController *player = ECS_GET(ecs, e, PlayerController);
         Transform *t = ECS_GET(ecs, e, Transform);
         Collider *col = ECS_GET(ecs, e, Collider);
+        CharacterMover* mover = ECS_GET(ecs, e, CharacterMover);
 
         double dx, dy;
         window_get_mouse_delta(win, &dx, &dy);
@@ -97,13 +98,13 @@ static void player_controller_update(void *sys_data, SystemManager *mgr, float d
         bool grounded = physics_system_raycast(phys, ecs, rayOrigin, rayDir, UINT64_MAX, &hit);
 
         if (grounded) {
-            apply_friction(player->currentVelocity, player->groundFriction, dt);
-            accelerate(player->currentVelocity, wishDir, player->maxGroundSpeed, player->groundAccel, dt);
+            apply_friction(mover->velocity, player->groundFriction, dt);
+            accelerate(mover->velocity, wishDir, player->maxGroundSpeed, player->groundAccel, dt);
         } else {
-            accelerate(player->currentVelocity, wishDir, player->maxAirSpeed, player->airAccel, dt);
+            accelerate(mover->velocity, wishDir, player->maxAirSpeed, player->airAccel, dt);
         }
 
-        float verticalVelocity = player->currentVelocity[1];
+        float verticalVelocity = mover->velocity[1];
         verticalVelocity -= phys->gravity * dt;
 
         if (grounded && verticalVelocity < 0.0f) {
@@ -113,10 +114,8 @@ static void player_controller_update(void *sys_data, SystemManager *mgr, float d
             }
         }
 
-        player->currentVelocity[1] = verticalVelocity;
+        mover->velocity[1] = verticalVelocity;
         player->wasGrounded = grounded;
-
-        physics_system_move_mover(phys, ecs, col, t->position, player->currentVelocity, dt, UINT64_MAX); 
     }
 }
 

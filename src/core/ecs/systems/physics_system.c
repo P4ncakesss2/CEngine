@@ -1,4 +1,6 @@
 #include "physics_system.h"
+#include "ecs/components.h"
+#include "ecs/ecs.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -366,43 +368,6 @@ void physics_system_free(PhysicsSystem *sys) {
     memset(sys, 0, sizeof(PhysicsSystem));
 }
 
-void physics_system_update(PhysicsSystem *sys, Ecs *w, float dt) {
-    if (!sys || !w || dt < 0.0f) return;
-    if (B3_IS_NULL(sys->world)) return;
-
-    spawn_new_bodies(sys, w);
-    ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody), e) {
-        RigidBody *rb = ECS_GET(w, e, RigidBody);
-        if (!rb || !rb->created || rb->type == RIGID_BODY_Static) continue;
-
-        b3Body_SetLinearVelocity(rb->bodyId, to_b3vec3(rb->linearVelocity));
-        b3Body_SetAngularVelocity(rb->bodyId, to_b3vec3(rb->angularVelocity));
-    }
-
-    sys->accumulator += dt;
-    float maxAccum = sys->fixedDt * PHYSICS_MAX_SUBSTEPS;
-    if (sys->accumulator > maxAccum) {
-        sys->accumulator = maxAccum;
-    }
-
-    int steps = 0;
-    if (sys->accumulator >= sys->fixedDt) {
-        for (uint32_t i = 0; i < sys->bodyCount; i++) {
-            PhysicsBodyEntry *entry = &sys->bodies[i];
-            if (entry->isStatic) continue;
-            b3WorldTransform xf = b3Body_GetTransform(entry->bodyId);
-            entry->prevPos = xf.p;
-            entry->prevRot = xf.q;
-        }
-    }
-    while (sys->accumulator >= sys->fixedDt && steps < PHYSICS_MAX_SUBSTEPS) {
-        b3World_Step(sys->world, sys->fixedDt, sys->subStepCount);
-        sys->accumulator -= sys->fixedDt;
-        steps++;
-    }
-
-    writeback_and_reap(sys, w);
-}
 
 static Entity entity_from_shape(b3ShapeId shapeId) {
     return userdata_to_entity(b3Shape_GetUserData(shapeId));
@@ -496,8 +461,7 @@ static bool mover_depenetrate(Ecs *w, b3WorldId world, const Collider *collider,
     return foundAny;
 }
 
-void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *collider,
-                                vec3 origin, vec3 velocity, float dt, uint64_t categoryMask) {
+static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *collider, vec3 origin, vec3 velocity, float dt, uint64_t categoryMask) {
     if (!sys || !collider || B3_IS_NULL(sys->world) || dt <= 0.0f) return;
 
     b3Capsule mover;
@@ -554,6 +518,52 @@ bool physics_system_raycast(PhysicsSystem *sys, Ecs *w, vec3 origin, vec3 transl
     out->normal[1] = result.normal.y;
     out->normal[2] = result.normal.z;
     return true;
+}
+
+void physics_system_update(PhysicsSystem *sys, Ecs *w, float dt) {
+    if (!sys || !w || dt < 0.0f) return;
+    if (B3_IS_NULL(sys->world)) return;
+
+    spawn_new_bodies(sys, w);
+    ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody), e) {
+        RigidBody *rb = ECS_GET(w, e, RigidBody);
+        if (!rb || !rb->created || rb->type == RIGID_BODY_Static) continue;
+
+        b3Body_SetLinearVelocity(rb->bodyId, to_b3vec3(rb->linearVelocity));
+        b3Body_SetAngularVelocity(rb->bodyId, to_b3vec3(rb->angularVelocity));
+    }
+
+    sys->accumulator += dt;
+    float maxAccum = sys->fixedDt * PHYSICS_MAX_SUBSTEPS;
+    if (sys->accumulator > maxAccum) {
+        sys->accumulator = maxAccum;
+    }
+
+    int steps = 0;
+    if (sys->accumulator >= sys->fixedDt) {
+        for (uint32_t i = 0; i < sys->bodyCount; i++) {
+            PhysicsBodyEntry *entry = &sys->bodies[i];
+            if (entry->isStatic) continue;
+            b3WorldTransform xf = b3Body_GetTransform(entry->bodyId);
+            entry->prevPos = xf.p;
+            entry->prevRot = xf.q;
+        }
+    }
+
+    ECS_EACH(w, ECS_MASK(COMPONENT_Collider, COMPONENT_CharacterMover, COMPONENT_Transform), e) {
+        Collider* col = ECS_GET(w, e, Collider);
+        Transform* trans = ECS_GET(w, e, Transform);
+        CharacterMover* mover = ECS_GET(w, e, CharacterMover);
+        physics_system_move_mover(sys, w, col, trans->position, mover->velocity, dt, col->maskBits);
+    }
+
+    while (sys->accumulator >= sys->fixedDt && steps < PHYSICS_MAX_SUBSTEPS) {
+        b3World_Step(sys->world, sys->fixedDt, sys->subStepCount);
+        sys->accumulator -= sys->fixedDt;
+        steps++;
+    }
+
+    writeback_and_reap(sys, w);
 }
 
 static void physics_system_type_free(void *data) {

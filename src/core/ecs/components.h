@@ -88,6 +88,10 @@ typedef struct {
     bool     created;
 } RigidBody;
 
+typedef struct {
+    vec3 velocity;
+} CharacterMover;
+
 typedef enum {
     COLLIDER_Box,
     COLLIDER_Sphere,
@@ -96,7 +100,6 @@ typedef enum {
 
 typedef struct {
     ColliderType type;
-
     vec3 offset;
 
     float density;
@@ -133,7 +136,6 @@ typedef struct {
     float lookSensitivity;
     float pitch;
     float yaw;
-    vec3 currentVelocity;
     float maxGroundSpeed;
     float maxAirSpeed;
     float groundAccel;

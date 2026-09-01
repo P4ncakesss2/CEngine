@@ -86,6 +86,9 @@ static void spawn_flying_camera(Ecs *ecs) {
     };
     ECS_ADD(ecs, e, PlayerController, player);
 
+	CharacterMover mover = {0};
+	ECS_ADD(ecs, e, CharacterMover, mover);
+
     Collider col = { .type = COLLIDER_Capsule };
     col.capsule.radius = 0.3f;
     col.capsule.height = 1.8f;

@@ -15,20 +15,20 @@ static void render_ui(void* user_data) {
     igText("FPS: %.1f", app->fps);
     igText("Frame Time: %.2f ms", app->frameTimeMs);
 
-    ECS_EACH(&app->ecs, ECS_MASK(COMPONENT_PlayerController), e) {
-        PlayerController* player = ECS_GET(&app->ecs, e, PlayerController);
+    ECS_EACH(&app->ecs, ECS_MASK(COMPONENT_CharacterMover), e) {
+        CharacterMover* player = ECS_GET(&app->ecs, e, CharacterMover);
 
-        float horizontalSpeed = sqrtf(player->currentVelocity[0] * player->currentVelocity[0]
-                                     + player->currentVelocity[2] * player->currentVelocity[2]);
-        float totalSpeed = sqrtf(player->currentVelocity[0] * player->currentVelocity[0]
-                                + player->currentVelocity[1] * player->currentVelocity[1]
-                                + player->currentVelocity[2] * player->currentVelocity[2]);
+        float horizontalSpeed = sqrtf(player->velocity[0] * player->velocity[0]
+                                     + player->velocity[2] * player->velocity[2]);
+        float totalSpeed = sqrtf(player->velocity[0] * player->velocity[0]
+                                + player->velocity[1] * player->velocity[1]
+                                + player->velocity[2] * player->velocity[2]);
 
         igSeparator();
         igText("Speed (horizontal): %.2f u/s", horizontalSpeed);
         igText("Speed (total): %.2f u/s", totalSpeed);
         igText("Velocity: (%.2f, %.2f, %.2f)",
-               player->currentVelocity[0], player->currentVelocity[1], player->currentVelocity[2]);
+               player->velocity[0], player->velocity[1], player->velocity[2]);
 
         break;
     }
