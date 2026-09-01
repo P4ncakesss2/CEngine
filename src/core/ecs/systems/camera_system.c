@@ -98,7 +98,7 @@ static void camera_system_type_free(void *data) {
     free(data);
 }
 
-static void camera_system_type_update(void *data, SystemManager *mgr, float dt) {
+static void camera_system_type_update(void *data, SystemManager *mgr, float dt, float alpha) {
     (void)dt;
     VkExtent2D extent = renderer_get_extent(mgr->renderer);
     float aspect = (float)extent.width / extent.height;
@@ -109,6 +109,6 @@ bool camera_system_type_init(SystemManager *mgr) {
     CameraSystem *sys = calloc(1, sizeof(CameraSystem));
     if (!sys) return false;
     camera_system_init(sys);
-    system_type_register(mgr, SYSTEM_TYPE_Camera, sys, camera_system_type_free, camera_system_type_update);
+    system_type_register(mgr, SYSTEM_TYPE_Camera, sys, camera_system_type_free, camera_system_type_update, NULL);
     return true;
 }

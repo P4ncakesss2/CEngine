@@ -47,7 +47,7 @@ static void render_system_type_free(void *data) {
     free(data);
 }
 
-static void render_system_type_update(void *data, SystemManager *mgr, float dt) {
+static void render_system_type_update(void *data, SystemManager *mgr, float dt, float alpha) {
     (void)dt;
     CameraSystem *camera = SYSTEM_GET(mgr, Camera);
     render_system_update(data, mgr->ecs, camera, mgr->renderer);
@@ -57,6 +57,6 @@ bool render_system_type_init(SystemManager *mgr) {
     RenderSystem *sys = calloc(1, sizeof(RenderSystem));
     if (!sys) return false;
     render_system_init(sys);
-    system_type_register(mgr, SYSTEM_TYPE_Render, sys, render_system_type_free, render_system_type_update);
+    system_type_register(mgr, SYSTEM_TYPE_Render, sys, render_system_type_free, render_system_type_update, NULL);
     return true;
 }

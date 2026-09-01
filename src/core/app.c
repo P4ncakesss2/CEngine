@@ -70,6 +70,8 @@ int app_init(EngineApp* app, const AppConfig* config)
     }
 
     app->lastTime = (float)window_get_time();
+    app->fixedAccumulator = 0.0f;
+    app->fixedDeltaTime = config->fixedUpdateRate > 0.0f ? 1.0f / config->fixedUpdateRate : 1.0f / 60.0f;
 
     return 0; 
 
@@ -111,9 +113,13 @@ bool app_should_close(EngineApp* app)
 void app_update(EngineApp* app)
 {
     window_poll_events(&app->window);
+
     app->currentTime = (float)window_get_time();
     app->deltaTime = app->currentTime - app->lastTime;
     app->lastTime = app->currentTime;
+
+    if (app->deltaTime > 0.25f)
+        app->deltaTime = 0.25f;
 
     app->fps = app->deltaTime > 0.0f ? 1.0f / app->deltaTime : app->fps;
     app->frameTimeMs = app->deltaTime * 1000.0f;
@@ -123,5 +129,10 @@ void app_update(EngineApp* app)
         fprintf(stderr, "scene_manager: base scene transition failed: %s\n", ecs_result_str(frame_scene_result));
     }
 
-    system_manager_update(&app->systems, app->deltaTime);
+    system_manager_update(&app->systems, app->deltaTime, app->fixedAccumulator / app->fixedDeltaTime);
+    app->fixedAccumulator += app->deltaTime;
+    while (app->fixedAccumulator >= app->fixedDeltaTime) {
+        system_manager_fixed_update(&app->systems, app->fixedDeltaTime);
+        app->fixedAccumulator -= app->fixedDeltaTime;
+    }
 }

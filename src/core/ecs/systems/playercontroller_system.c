@@ -47,18 +47,16 @@ static void player_controller_free(void *sys_data) {
     }
 }
 
-static void player_controller_update(void *sys_data, SystemManager *mgr, float dt) {
+static void player_controller_update(void *sys_data, SystemManager *mgr, float dt, float alpha) {
     (void)sys_data;
+    (void)dt;
+    (void)alpha;
     Ecs *ecs = mgr->ecs;
     Window *win = mgr->window;
 
-    PhysicsSystem *phys = SYSTEM_GET(mgr, Physics);
-
-    ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform, COMPONENT_Collider, COMPONENT_CharacterMover), e) {
+    ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform), e) {
         PlayerController *player = ECS_GET(ecs, e, PlayerController);
         Transform *t = ECS_GET(ecs, e, Transform);
-        Collider *col = ECS_GET(ecs, e, Collider);
-        CharacterMover* mover = ECS_GET(ecs, e, CharacterMover);
 
         double dx, dy;
         window_get_mouse_delta(win, &dx, &dy);
@@ -76,6 +74,21 @@ static void player_controller_update(void *sys_data, SystemManager *mgr, float d
         t->rotation[0] = player->pitch;
         t->rotation[1] = player->yaw;
         t->rotation[2] = 0.0f;
+    }
+}
+
+static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, float fixed_dt) {
+    (void)sys_data;
+    Ecs *ecs = mgr->ecs;
+    Window *win = mgr->window;
+
+    PhysicsSystem *phys = SYSTEM_GET(mgr, Physics);
+
+    ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform, COMPONENT_Collider, COMPONENT_CharacterMover), e) {
+        PlayerController *player = ECS_GET(ecs, e, PlayerController);
+        Transform *t = ECS_GET(ecs, e, Transform);
+        Collider *col = ECS_GET(ecs, e, Collider);
+        CharacterMover* mover = ECS_GET(ecs, e, CharacterMover);
 
         vec3 forward = { sinf(player->yaw), 0.0f, cosf(player->yaw) };
         vec3 right   = { cosf(player->yaw), 0.0f, -sinf(player->yaw) };
@@ -98,14 +111,14 @@ static void player_controller_update(void *sys_data, SystemManager *mgr, float d
         bool grounded = physics_system_raycast(phys, ecs, rayOrigin, rayDir, UINT64_MAX, &hit);
 
         if (grounded) {
-            apply_friction(mover->velocity, player->groundFriction, dt);
-            accelerate(mover->velocity, wishDir, player->maxGroundSpeed, player->groundAccel, dt);
+            apply_friction(mover->velocity, player->groundFriction, fixed_dt);
+            accelerate(mover->velocity, wishDir, player->maxGroundSpeed, player->groundAccel, fixed_dt);
         } else {
-            accelerate(mover->velocity, wishDir, player->maxAirSpeed, player->airAccel, dt);
+            accelerate(mover->velocity, wishDir, player->maxAirSpeed, player->airAccel, fixed_dt);
         }
 
         float verticalVelocity = mover->velocity[1];
-        verticalVelocity -= phys->gravity * dt;
+        verticalVelocity -= phys->gravity * fixed_dt;
 
         if (grounded && verticalVelocity < 0.0f) {
             verticalVelocity = -0.5f;
@@ -124,6 +137,6 @@ bool player_controller_type_init(SystemManager *mgr) {
     PlayerControllerSystem *sys_data = calloc(1, sizeof(PlayerControllerSystem));
     if (!sys_data) return false;
 
-    system_type_register(mgr, SYSTEM_TYPE_PlayerController, sys_data, player_controller_free, player_controller_update);
+    system_type_register(mgr, SYSTEM_TYPE_PlayerController, sys_data, player_controller_free, player_controller_update, player_controller_fixed_update);
     return true;
 }

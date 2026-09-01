@@ -111,7 +111,7 @@ static void transform_system_type_free(void *data) {
     free(data);
 }
 
-static void transform_system_type_update(void *data, SystemManager *mgr, float dt) {
+static void transform_system_type_update(void *data, SystemManager *mgr, float dt, float alpha) {
     (void)dt;
     transform_system_update(data, mgr->ecs);
 }
@@ -120,6 +120,6 @@ bool transform_system_type_init(SystemManager *mgr) {
     TransformSystem *sys = calloc(1, sizeof(TransformSystem));
     if (!sys) return false;
     transform_system_init(sys);
-    system_type_register(mgr, SYSTEM_TYPE_Transform, sys, transform_system_type_free, transform_system_type_update);
+    system_type_register(mgr, SYSTEM_TYPE_Transform, sys, transform_system_type_free, transform_system_type_update, NULL);
     return true;
 }

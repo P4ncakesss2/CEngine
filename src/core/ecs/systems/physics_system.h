@@ -18,6 +18,12 @@ typedef struct {
 } PhysicsBodyEntry;
 
 typedef struct {
+    Entity   entity;
+    b3Vec3   prevPos;
+    b3Vec3   currPos;
+} PhysicsMoverEntry;
+
+typedef struct {
     bool   hit;
     Entity entity;
     vec3   point;
@@ -31,17 +37,24 @@ typedef struct PhysicsSystem {
     PhysicsBodyEntry *bodies;
     uint32_t          bodyCount;
     uint32_t          bodyCapacity;
+
+    PhysicsMoverEntry *movers;
+    uint32_t           moverCount;
+    uint32_t           moverCapacity;
+
     int subStepCount;
 
     uint32_t *entityToBody;
     uint32_t  entityToBodyCapacity;
 
-    float fixedDt;
-    float accumulator;
+    uint32_t *entityToMover;
+    uint32_t  entityToMoverCapacity;
+
     float gravity; 
 } PhysicsSystem;
 
-#define PHYSICS_NO_BODY UINT32_MAX
+#define PHYSICS_NO_BODY  UINT32_MAX
+#define PHYSICS_NO_MOVER UINT32_MAX
 
 void physics_system_init(PhysicsSystem *sys);
 void physics_system_free(PhysicsSystem *sys);

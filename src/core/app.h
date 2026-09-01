@@ -41,6 +41,9 @@ typedef struct EngineApp {
     float deltaTime;
     float fps;
     float frameTimeMs;
+
+    float fixedAccumulator;
+    float fixedDeltaTime;
 } EngineApp;
 
 typedef struct AppConfig {
@@ -57,6 +60,7 @@ typedef struct AppConfig {
     void* imgui_userdata;
     const char* initialScenePath;
     const char* initialPakPath;
+    float fixedUpdateRate;
 } AppConfig;
 
 int app_init(EngineApp* app, const AppConfig* config);

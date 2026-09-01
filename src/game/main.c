@@ -52,6 +52,7 @@ int main(int argc, char **argv)
         .validationEnabled = false,
         .initialPakPath = "game.pak",
         .initialScenePath = "scenes/level1.scn",
+        .fixedUpdateRate = 60.0f,
     };
     if (app_init(&app, &config) != 0) {
         return 1;

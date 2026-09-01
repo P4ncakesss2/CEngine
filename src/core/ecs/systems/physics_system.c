@@ -1,13 +1,11 @@
 #include "physics_system.h"
 #include "ecs/components.h"
 #include "ecs/ecs.h"
+#include "ecs/system.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <float.h>
-
-#define PHYSICS_FIXED_DT     (1.0f / 60.0f)
-#define PHYSICS_MAX_SUBSTEPS 5
 
 static b3Vec3 to_b3vec3(const vec3 v) {
     b3Vec3 out;
@@ -114,6 +112,17 @@ static bool bodies_reserve(PhysicsSystem *sys, uint32_t needed) {
     return true;
 }
 
+static bool movers_reserve(PhysicsSystem *sys, uint32_t needed) {
+    if (needed <= sys->moverCapacity) return true;
+    uint32_t new_cap = sys->moverCapacity ? sys->moverCapacity * 2 : 64;
+    while (new_cap < needed) new_cap *= 2;
+    PhysicsMoverEntry *p = realloc(sys->movers, new_cap * sizeof(PhysicsMoverEntry));
+    if (!p) return false;
+    sys->movers = p;
+    sys->moverCapacity = new_cap;
+    return true;
+}
+
 static b3Filter collider_filter(const Collider *col) {
     b3Filter filter;
     filter.categoryBits = col->categoryBits;
@@ -208,6 +217,18 @@ static int32_t find_body_index(const PhysicsSystem *sys, Entity e) {
     return -1;
 }
 
+static int32_t find_mover_index(const PhysicsSystem *sys, Entity e) {
+    if (!sys) return -1;
+    if (e < sys->entityToMoverCapacity) {
+        uint32_t index = sys->entityToMover[e];
+        if (index != PHYSICS_NO_MOVER && index < sys->moverCount && sys->movers[index].entity == e)
+            return (int32_t)index;
+    }
+    for (uint32_t i = 0; i < sys->moverCount; ++i)
+        if (sys->movers[i].entity == e) return (int32_t)i;
+    return -1;
+}
+
 static bool entity_to_body_reserve(PhysicsSystem *sys, Entity e) {
     if (e < sys->entityToBodyCapacity) return true;
     uint32_t new_cap = sys->entityToBodyCapacity ? sys->entityToBodyCapacity : 64;
@@ -220,6 +241,21 @@ static bool entity_to_body_reserve(PhysicsSystem *sys, Entity e) {
     for (uint32_t i = sys->entityToBodyCapacity; i < new_cap; ++i) p[i] = PHYSICS_NO_BODY;
     sys->entityToBody = p;
     sys->entityToBodyCapacity = new_cap;
+    return true;
+}
+
+static bool entity_to_mover_reserve(PhysicsSystem *sys, Entity e) {
+    if (e < sys->entityToMoverCapacity) return true;
+    uint32_t new_cap = sys->entityToMoverCapacity ? sys->entityToMoverCapacity : 64;
+    while (new_cap <= e) {
+        if (new_cap > UINT32_MAX / 2) { new_cap = e + 1; break; }
+        new_cap *= 2;
+    }
+    uint32_t *p = realloc(sys->entityToMover, new_cap * sizeof(uint32_t));
+    if (!p) return false;
+    for (uint32_t i = sys->entityToMoverCapacity; i < new_cap; ++i) p[i] = PHYSICS_NO_MOVER;
+    sys->entityToMover = p;
+    sys->entityToMoverCapacity = new_cap;
     return true;
 }
 
@@ -279,6 +315,20 @@ static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
     }
 }
 
+static void sync_movers(PhysicsSystem *sys, Ecs *w) {
+    ECS_EACH(w, ECS_MASK(COMPONENT_Collider, COMPONENT_CharacterMover, COMPONENT_Transform), e) {
+        if (find_mover_index(sys, e) >= 0) continue;
+        Transform *t = ECS_GET(w, e, Transform);
+        if (!movers_reserve(sys, sys->moverCount + 1) || !entity_to_mover_reserve(sys, e)) continue;
+
+        uint32_t index = sys->moverCount++;
+        sys->movers[index].entity = e;
+        sys->movers[index].prevPos = to_b3vec3(t->position);
+        sys->movers[index].currPos = to_b3vec3(t->position);
+        sys->entityToMover[e] = index;
+    }
+}
+
 static void b3quat_to_versor(b3Quat q, versor out) {
     out[0] = q.v.x;
     out[1] = q.v.y;
@@ -286,11 +336,53 @@ static void b3quat_to_versor(b3Quat q, versor out) {
     out[3] = q.s;
 }
 
-static void writeback_and_reap(PhysicsSystem *sys, Ecs *w) {
-    float alpha = sys->fixedDt > 0.0f ? sys->accumulator / sys->fixedDt : 0.0f;
+static void physics_system_interpolate(PhysicsSystem *sys, Ecs *w, float alpha) {
     if (alpha < 0.0f) alpha = 0.0f;
     if (alpha > 1.0f) alpha = 1.0f;
 
+    for (uint32_t i = 0; i < sys->bodyCount; i++) {
+        PhysicsBodyEntry *entry = &sys->bodies[i];
+        if (entry->isStatic) continue;
+
+        Transform *t = ECS_GET(w, entry->entity, Transform);
+        if (!t) continue;
+
+        b3WorldTransform xf = b3Body_GetTransform(entry->bodyId);
+        b3Vec3 blendedPos = {
+            entry->prevPos.x + (xf.p.x - entry->prevPos.x) * alpha,
+            entry->prevPos.y + (xf.p.y - entry->prevPos.y) * alpha,
+            entry->prevPos.z + (xf.p.z - entry->prevPos.z) * alpha
+        };
+        versor fromQ, toQ, blendedQ;
+        b3quat_to_versor(entry->prevRot, fromQ);
+        b3quat_to_versor(xf.q, toQ);
+        glm_quat_slerp(fromQ, toQ, alpha, blendedQ);
+        mat4 bodyWorld;
+        glm_quat_mat4(blendedQ, bodyWorld);
+        bodyWorld[3][0] = (float)blendedPos.x;
+        bodyWorld[3][1] = (float)blendedPos.y;
+        bodyWorld[3][2] = (float)blendedPos.z;
+        t->position[0] = bodyWorld[3][0];
+        t->position[1] = bodyWorld[3][1];
+        t->position[2] = bodyWorld[3][2];
+        mat4_to_euler_yxz(bodyWorld, t->rotation);
+        glm_mat4_copy(bodyWorld, t->worldOverride);
+        t->worldOverrideActive = true;
+    }
+
+    for (uint32_t i = 0; i < sys->moverCount; i++) {
+        PhysicsMoverEntry *entry = &sys->movers[i];
+        Transform *t = ECS_GET(w, entry->entity, Transform);
+        if (!t) continue;
+
+        t->position[0] = entry->prevPos.x + (entry->currPos.x - entry->prevPos.x) * alpha;
+        t->position[1] = entry->prevPos.y + (entry->currPos.y - entry->prevPos.y) * alpha;
+        t->position[2] = entry->prevPos.z + (entry->currPos.z - entry->prevPos.z) * alpha;
+        t->worldOverrideActive = false;
+    }
+}
+
+static void physics_system_reap_and_sync(PhysicsSystem *sys, Ecs *w) {
     uint32_t writeIdx = 0;
     for (uint32_t i = 0; i < sys->bodyCount; i++) {
         PhysicsBodyEntry *entry = &sys->bodies[i];
@@ -314,30 +406,6 @@ static void writeback_and_reap(PhysicsSystem *sys, Ecs *w) {
         if (dst->isStatic) continue;
 
         RigidBody *rb = ECS_GET(w, dst->entity, RigidBody);
-        Transform *t  = ECS_GET(w, dst->entity, Transform);
-        if (t) {
-            b3WorldTransform xf = b3Body_GetTransform(dst->bodyId);
-            b3Vec3 blendedPos = {
-                dst->prevPos.x + (xf.p.x - dst->prevPos.x) * alpha,
-                dst->prevPos.y + (xf.p.y - dst->prevPos.y) * alpha,
-                dst->prevPos.z + (xf.p.z - dst->prevPos.z) * alpha
-            };
-            versor fromQ, toQ, blendedQ;
-            b3quat_to_versor(dst->prevRot, fromQ);
-            b3quat_to_versor(xf.q, toQ);
-            glm_quat_slerp(fromQ, toQ, alpha, blendedQ);
-            mat4 bodyWorld;
-            glm_quat_mat4(blendedQ, bodyWorld);
-            bodyWorld[3][0] = (float)blendedPos.x;
-            bodyWorld[3][1] = (float)blendedPos.y;
-            bodyWorld[3][2] = (float)blendedPos.z;
-            t->position[0] = bodyWorld[3][0];
-            t->position[1] = bodyWorld[3][1];
-            t->position[2] = bodyWorld[3][2];
-            mat4_to_euler_yxz(bodyWorld, t->rotation);
-            glm_mat4_copy(bodyWorld, t->worldOverride);
-            t->worldOverrideActive = true;
-        }
         if (rb) {
             b3Vec3 lin = b3Body_GetLinearVelocity(dst->bodyId);
             b3Vec3 ang = b3Body_GetAngularVelocity(dst->bodyId);
@@ -346,12 +414,33 @@ static void writeback_and_reap(PhysicsSystem *sys, Ecs *w) {
         }
     }
     sys->bodyCount = writeIdx;
+
+    uint32_t moverWriteIdx = 0;
+    for (uint32_t i = 0; i < sys->moverCount; i++) {
+        PhysicsMoverEntry *entry = &sys->movers[i];
+        bool stillOwnsMover = ecs_entity_alive(w, entry->entity)
+                            && ECS_HAS(w, entry->entity, CharacterMover)
+                            && ECS_HAS(w, entry->entity, Collider)
+                            && ECS_HAS(w, entry->entity, Transform);
+        if (!stillOwnsMover) {
+            if (entry->entity < sys->entityToMoverCapacity)
+                sys->entityToMover[entry->entity] = PHYSICS_NO_MOVER;
+            continue;
+        }
+
+        if (moverWriteIdx != i) {
+            sys->movers[moverWriteIdx] = *entry;
+            if (entry->entity < sys->entityToMoverCapacity)
+                sys->entityToMover[entry->entity] = moverWriteIdx;
+        }
+        moverWriteIdx++;
+    }
+    sys->moverCount = moverWriteIdx;
 }
 
 void physics_system_init(PhysicsSystem *sys) {
     memset(sys, 0, sizeof(PhysicsSystem));
     sys->subStepCount = 4;
-    sys->fixedDt = PHYSICS_FIXED_DT;
 
     b3WorldDef def = b3DefaultWorldDef();
     sys->world = b3CreateWorld(&def);
@@ -370,38 +459,13 @@ void physics_system_free(PhysicsSystem *sys) {
     }
     free(sys->bodies);
     free(sys->entityToBody);
+    free(sys->movers);
+    free(sys->entityToMover);
     memset(sys, 0, sizeof(PhysicsSystem));
 }
 
-
 static Entity entity_from_shape(b3ShapeId shapeId) {
     return userdata_to_entity(b3Shape_GetUserData(shapeId));
-}
-
-#define PHYSICS_MOVER_MAX_PLANES     16
-#define PHYSICS_MOVER_MAX_ITERATIONS 4
-#define PHYSICS_MOVER_SETTLE_EPS_SQ  (1e-8f)
-
-static bool body_id_equals(b3BodyId a, b3BodyId b) {
-    return memcmp(&a, &b, sizeof(b3BodyId)) == 0;
-}
-
-typedef struct {
-    b3CollisionPlane planes[PHYSICS_MOVER_MAX_PLANES];
-    int count;
-} MoverPlaneCollectContext;
-
-static bool mover_plane_collect_cb(b3ShapeId shapeId, const b3PlaneResult *plane, int planeCount, void *context) {
-    (void)planeCount;
-    MoverPlaneCollectContext *ctx = context;
-    if (ctx->count >= PHYSICS_MOVER_MAX_PLANES) return false;
-
-    b3CollisionPlane *out = &ctx->planes[ctx->count++];
-    out->plane        = plane->plane;
-    out->pushLimit     = FLT_MAX;
-    out->push          = 0.0f;
-    out->clipVelocity  = true;
-    return true;
 }
 
 static bool mover_capsule_from_collider(const Collider *collider, const vec3 origin, b3Capsule *out) {
@@ -432,71 +496,73 @@ static bool mover_capsule_from_collider(const Collider *collider, const vec3 ori
     return true;
 }
 
-static bool mover_depenetrate(Ecs *w, b3WorldId world, const Collider *collider, b3QueryFilter filter,
-                               vec3 origin, b3Capsule *mover,
-                               b3CollisionPlane *touchedPlanes, int *touchedCount,
-                               b3Vec3 *moverVelocity, float moverMass, float moverFriction, float gravity,
-                               float dt) {
-    b3Pos zero = {0.0f, 0.0f, 0.0f};
-    bool foundAny = false;
+#define PHYSICS_MOVER_MAX_PLANES 16
+#define PHYSICS_MOVER_SKIN 0.01f
 
-    for (int iter = 0; iter < PHYSICS_MOVER_MAX_ITERATIONS; iter++) {
-        MoverPlaneCollectContext ctx = {0};
-        b3World_CollideMover(world, zero, mover, filter, mover_plane_collect_cb, &ctx);
-        if (ctx.count == 0) break;
-        foundAny = true;
+typedef struct {
+    b3CollisionPlane planes[PHYSICS_MOVER_MAX_PLANES];
+    int              count;
+} PhysicsMoverPlaneContext;
 
-        b3PlaneSolverResult result = b3SolvePlanes((b3Vec3){0.0f, 0.0f, 0.0f}, ctx.planes, ctx.count);
+static bool physics_system_mover_plane_cb(b3ShapeId shapeId, const b3PlaneResult *plane, int planeCount, void *context) {
+    (void)shapeId;
+    (void)planeCount;
+    PhysicsMoverPlaneContext *ctx = context;
+    if (ctx->count >= PHYSICS_MOVER_MAX_PLANES) return false;
 
-        for (int i = 0; i < ctx.count && *touchedCount < PHYSICS_MOVER_MAX_PLANES; i++) {
-            touchedPlanes[(*touchedCount)++] = ctx.planes[i];
-        }
+    b3CollisionPlane *cp = &ctx->planes[ctx->count++];
+    cp->plane        = plane->plane;
+    cp->plane.offset += PHYSICS_MOVER_SKIN;
+    cp->pushLimit    = FLT_MAX;
+    cp->push         = 0.0f;
+    cp->clipVelocity = true;
 
-        origin[0] += result.delta.x;
-        origin[1] += result.delta.y;
-        origin[2] += result.delta.z;
-        mover_capsule_from_collider(collider, origin, mover);
-
-        float deltaLenSq = result.delta.x * result.delta.x
-                          + result.delta.y * result.delta.y
-                          + result.delta.z * result.delta.z;
-        if (deltaLenSq < PHYSICS_MOVER_SETTLE_EPS_SQ) break;
-    }
-
-    return foundAny;
+    return ctx->count < PHYSICS_MOVER_MAX_PLANES;
 }
 
 static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *collider, vec3 origin, vec3 velocity, float dt, uint64_t categoryMask) {
-    if (!sys || !collider || B3_IS_NULL(sys->world) || dt <= 0.0f) return;
+    (void)w;
+    if (!sys || B3_IS_NULL(sys->world) || !collider || dt <= 0.0f) return;
 
-    b3Capsule mover;
-    if (!mover_capsule_from_collider(collider, origin, &mover)) return;
+    b3Capsule capsule;
+    if (!mover_capsule_from_collider(collider, origin, &capsule)) return;
 
     b3QueryFilter filter;
     filter.categoryBits = UINT64_MAX;
     filter.maskBits      = categoryMask;
 
-    b3Pos zero = {0.0f, 0.0f, 0.0f};
-    b3Vec3 moverVelocity = to_b3vec3(velocity);
-    float moverMass = collider->mass;
-    float moverFriction = collider->friction;
-    float gravity = sys->gravity;
+    b3Vec3 desiredTranslation = b3MulSV(dt, to_b3vec3(velocity));
+    float fraction = b3World_CastMover(sys->world, b3Pos_zero, &capsule, desiredTranslation, filter, NULL, NULL);
+    b3Vec3 safeDelta = b3MulSV(fraction, desiredTranslation);
+    capsule.center1 = b3Add(capsule.center1, safeDelta);
+    capsule.center2 = b3Add(capsule.center2, safeDelta);
 
-    b3CollisionPlane touchedPlanes[PHYSICS_MOVER_MAX_PLANES];
-    int touchedCount = 0;
-    b3Vec3 translation = to_b3vec3((vec3){velocity[0] * dt, velocity[1] * dt, velocity[2] * dt});
+    b3Vec3 totalDelta = safeDelta;
+    b3Vec3 finalVelocity = to_b3vec3(velocity);
 
-    float fraction = b3World_CastMover(sys->world, zero, &mover, translation, filter, NULL, NULL);
-    origin[0] += velocity[0] * dt * fraction;
-    origin[1] += velocity[1] * dt * fraction;
-    origin[2] += velocity[2] * dt * fraction;
-    mover_capsule_from_collider(collider, origin, &mover);
-    mover_depenetrate(w, sys->world, collider, filter, origin, &mover, touchedPlanes, &touchedCount, &moverVelocity, moverMass, moverFriction, gravity, dt);
-    
-    b3Vec3 clipped = touchedCount > 0 ? b3ClipVector(moverVelocity, touchedPlanes, touchedCount) : moverVelocity;
-    velocity[0] = clipped.x;
-    velocity[1] = clipped.y;
-    velocity[2] = clipped.z;
+    const int subIterations = 4;
+    PhysicsMoverPlaneContext planeCtx;
+
+    for (int i = 0; i < subIterations; ++i) {
+        planeCtx.count = 0;
+        b3World_CollideMover(sys->world, b3Pos_zero, &capsule, filter, physics_system_mover_plane_cb, &planeCtx);
+
+        if (planeCtx.count == 0) break;
+
+        b3PlaneSolverResult solved = b3SolvePlanes(b3Vec3_zero, planeCtx.planes, planeCtx.count);
+        finalVelocity = b3ClipVector(finalVelocity, planeCtx.planes, planeCtx.count);
+        capsule.center1 = b3Add(capsule.center1, solved.delta);
+        capsule.center2 = b3Add(capsule.center2, solved.delta);
+        totalDelta = b3Add(totalDelta, solved.delta);
+    }
+
+    velocity[0] = finalVelocity.x;
+    velocity[1] = finalVelocity.y;
+    velocity[2] = finalVelocity.z;
+
+    origin[0] += totalDelta.x;
+    origin[1] += totalDelta.y;
+    origin[2] += totalDelta.z;
 }
 
 bool physics_system_raycast(PhysicsSystem *sys, Ecs *w, vec3 origin, vec3 translation, uint64_t categoryMask, PhysicsRaycastHit *out) {
@@ -525,11 +591,15 @@ bool physics_system_raycast(PhysicsSystem *sys, Ecs *w, vec3 origin, vec3 transl
     return true;
 }
 
-void physics_system_update(PhysicsSystem *sys, Ecs *w, float dt) {
-    if (!sys || !w || dt < 0.0f) return;
+static void physics_system_type_fixed_update(void* data, SystemManager* mgr, float fixed_dt) {
+    PhysicsSystem *sys = data;
+    Ecs *w = mgr->ecs;
+    if (!sys || !w || fixed_dt < 0.0f) return;
     if (B3_IS_NULL(sys->world)) return;
 
     spawn_new_bodies(sys, w);
+    sync_movers(sys, w);
+
     ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody), e) {
         RigidBody *rb = ECS_GET(w, e, RigidBody);
         if (!rb || rb->type == RIGID_BODY_Static) continue;
@@ -540,37 +610,37 @@ void physics_system_update(PhysicsSystem *sys, Ecs *w, float dt) {
         b3Body_SetAngularVelocity(bodyId, to_b3vec3(rb->angularVelocity));
     }
 
-    sys->accumulator += dt;
-    float maxAccum = sys->fixedDt * PHYSICS_MAX_SUBSTEPS;
-    if (sys->accumulator > maxAccum) {
-        sys->accumulator = maxAccum;
+    for (uint32_t i = 0; i < sys->bodyCount; i++) {
+        PhysicsBodyEntry *entry = &sys->bodies[i];
+        if (entry->isStatic) continue;
+        b3WorldTransform xf = b3Body_GetTransform(entry->bodyId);
+        entry->prevPos = xf.p;
+        entry->prevRot = xf.q;
     }
 
-    int steps = 0;
-    if (sys->accumulator >= sys->fixedDt) {
-        for (uint32_t i = 0; i < sys->bodyCount; i++) {
-            PhysicsBodyEntry *entry = &sys->bodies[i];
-            if (entry->isStatic) continue;
-            b3WorldTransform xf = b3Body_GetTransform(entry->bodyId);
-            entry->prevPos = xf.p;
-            entry->prevRot = xf.q;
-        }
+    for (uint32_t i = 0; i < sys->moverCount; i++) {
+        PhysicsMoverEntry *entry = &sys->movers[i];
+        entry->prevPos = entry->currPos;
     }
-
+    
     ECS_EACH(w, ECS_MASK(COMPONENT_Collider, COMPONENT_CharacterMover, COMPONENT_Transform), e) {
         Collider* col = ECS_GET(w, e, Collider);
         Transform* trans = ECS_GET(w, e, Transform);
         CharacterMover* mover = ECS_GET(w, e, CharacterMover);
-        physics_system_move_mover(sys, w, col, trans->position, mover->velocity, dt, col->maskBits);
+        physics_system_move_mover(sys, w, col, trans->position, mover->velocity, fixed_dt, col->maskBits);
     }
 
-    while (sys->accumulator >= sys->fixedDt && steps < PHYSICS_MAX_SUBSTEPS) {
-        b3World_Step(sys->world, sys->fixedDt, sys->subStepCount);
-        sys->accumulator -= sys->fixedDt;
-        steps++;
+    for (uint32_t i = 0; i < sys->moverCount; i++) {
+        PhysicsMoverEntry *entry = &sys->movers[i];
+        Transform *t = ECS_GET(w, entry->entity, Transform);
+        if (t) {
+            entry->currPos = to_b3vec3(t->position);
+        }
     }
 
-    writeback_and_reap(sys, w);
+    b3World_Step(sys->world, fixed_dt, sys->subStepCount);
+
+    physics_system_reap_and_sync(sys, w);
 }
 
 static void physics_system_type_free(void *data) {
@@ -578,14 +648,15 @@ static void physics_system_type_free(void *data) {
     free(data);
 }
 
-static void physics_system_type_update(void *data, SystemManager *mgr, float dt) {
-    physics_system_update(data, mgr->ecs, dt);
+static void physics_system_type_update(void *data, SystemManager *mgr, float dt, float alpha) {
+    (void)dt;
+    physics_system_interpolate(data, mgr->ecs, alpha);
 }
 
 bool physics_system_type_init(SystemManager *mgr) {
     PhysicsSystem *sys = calloc(1, sizeof(PhysicsSystem));
     if (!sys) return false;
     physics_system_init(sys);
-    system_type_register(mgr, SYSTEM_TYPE_Physics, sys, physics_system_type_free, physics_system_type_update);
+    system_type_register(mgr, SYSTEM_TYPE_Physics, sys, physics_system_type_free, physics_system_type_update, physics_system_type_fixed_update);
     return true;
 }
