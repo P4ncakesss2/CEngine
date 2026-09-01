@@ -135,7 +135,6 @@ typedef struct {
     float airAccel;
     float groundFriction;
     float jumpForce; 
-    bool  wasGrounded;
     Entity cameraEntity;
 } PlayerController;
 

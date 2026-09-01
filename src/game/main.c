@@ -1,4 +1,3 @@
-#include "GLFW/glfw3.h"
 #include "app.h"
 #include <stdbool.h>
 #include <stdio.h>

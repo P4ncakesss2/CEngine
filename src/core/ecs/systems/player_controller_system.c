@@ -91,12 +91,12 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         Collider *col = ECS_GET(ecs, e, Collider);
         CharacterMover* mover = ECS_GET(ecs, e, CharacterMover);
 
-        vec3 forward = { sinf(player->yaw), 0.0f, cosf(player->yaw) };
+        vec3 forward = { -sinf(player->yaw), 0.0f, -cosf(player->yaw) };
         vec3 right   = { cosf(player->yaw), 0.0f, -sinf(player->yaw) };
 
         vec3 wishDir = {0.0f, 0.0f, 0.0f};
-        if (window_key_down(win, GLFW_KEY_W)) glm_vec3_sub(wishDir, forward, wishDir);
-        if (window_key_down(win, GLFW_KEY_S)) glm_vec3_add(wishDir, forward, wishDir);
+        if (window_key_down(win, GLFW_KEY_W)) glm_vec3_add(wishDir, forward, wishDir);
+        if (window_key_down(win, GLFW_KEY_S)) glm_vec3_sub(wishDir, forward, wishDir);
         if (window_key_down(win, GLFW_KEY_D)) glm_vec3_add(wishDir, right, wishDir);
         if (window_key_down(win, GLFW_KEY_A)) glm_vec3_sub(wishDir, right, wishDir);
 
@@ -131,7 +131,6 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         }
 
         mover->velocity[1] = verticalVelocity;
-        player->wasGrounded = grounded;
     }
 }
 
