@@ -18,9 +18,10 @@ typedef struct {
     uint32_t    index_count;
 } MeshAsset;
 
-#define MESH_PROC_CUBE   "proc:cube"
-#define MESH_PROC_SPHERE "proc:sphere"
-#define MESH_PROC_PLANE  "proc:plane"
+#define MESH_PROC_CUBE    "proc:cube"
+#define MESH_PROC_SPHERE  "proc:sphere"
+#define MESH_PROC_PLANE   "proc:plane"
+#define MESH_PROC_CAPSULE "proc:capsule"
 
 #define CMSH_MAGIC   0x48534D43u /* 'CMSH' */
 #define CMSH_VERSION 1u

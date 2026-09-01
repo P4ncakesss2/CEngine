@@ -9,6 +9,7 @@
 
 #define PHYSICS_PI 3.14159265358979323846f
 #define PHYSICS_MOVER_MAX_PLANES 16
+#define PHYSICS_MOVER_SUBITERATIONS 5
 #define PHYSICS_MOVER_SKIN 0.01f
 
 static b3Vec3 to_b3vec3(const vec3 v) {
@@ -498,8 +499,8 @@ static bool mover_capsule_from_collider(const Collider *collider, const vec3 ori
     float baseY = origin[1] + collider->offset[1];
     float baseZ = origin[2] + collider->offset[2];
 
-    out->center1 = (b3Vec3){baseX, baseY + radius, baseZ};
-    out->center2 = (b3Vec3){baseX, baseY + radius + innerHeight, baseZ};
+    out->center1 = (b3Vec3){baseX, baseY - innerHeight * 0.5f, baseZ};
+    out->center2 = (b3Vec3){baseX, baseY + innerHeight * 0.5f, baseZ};
     out->radius  = radius;
     return true;
 }
@@ -539,11 +540,9 @@ static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider
 
     b3Vec3 totalDelta = safeDelta;
     b3Vec3 finalVelocity = to_b3vec3(velocity);
-
-    const int subIterations = 5;
     PhysicsMoverPlaneContext planeCtx;
 
-    for (int i = 0; i < subIterations; ++i) {
+    for (int i = 0; i < PHYSICS_MOVER_SUBITERATIONS; ++i) {
         planeCtx.count = 0;
         b3World_CollideMover(sys->world, b3Pos_zero, &capsule, filter, physics_system_mover_plane_cb, &planeCtx);
         if (planeCtx.count == 0) break;
@@ -577,9 +576,9 @@ void physics_system_init(PhysicsSystem *sys) {
     if (B3_IS_NULL(sys->world)) {
         return;
     }
-    sys->gravity = sqrtf(def.gravity.x * def.gravity.x
-                        + def.gravity.y * def.gravity.y
-                        + def.gravity.z * def.gravity.z);
+    sys->gravity[0] = def.gravity.x;
+    sys->gravity[1] = def.gravity.y;
+    sys->gravity[2] = def.gravity.z;
     return;
 }
 

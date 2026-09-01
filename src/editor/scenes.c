@@ -48,7 +48,6 @@ static Entity spawn_dynamic_box(Ecs *w, const char *name, vec3 pos, vec3 rot, ve
 	boxCollider.type = COLLIDER_Box;
 	glm_vec3_copy(halfExtents, boxCollider.box.halfExtents);
 	boxCollider.density = density;
-	boxCollider.mass = 50.0f;
 	boxCollider.friction = 0.6f;
 	boxCollider.restitution = 0.1f;
 	boxCollider.categoryBits = 1; 
@@ -66,6 +65,12 @@ static void spawn_flying_camera(Ecs *ecs) {
     glm_mat4_identity(t.matrix);
     ECS_ADD(ecs, e, Transform, t);
 
+	Entity cameraEntity;
+	ecs_entity_create(ecs, &cameraEntity);
+	Transform t2 = { .scale = {1, 1, 1}, .position = {0,0.7,0} };
+    glm_mat4_identity(t.matrix);
+    ECS_ADD(ecs, cameraEntity, Transform, t2);
+
     Camera cam = { 
         .active = true, 
         .fov = 90.0f, 
@@ -73,8 +78,15 @@ static void spawn_flying_camera(Ecs *ecs) {
         .farPlane = 1000.0f, 
         .type = CAMERA_TYPE_Perspective 
     };
-    ECS_ADD(ecs, e, Camera, cam);
+    ECS_ADD(ecs, cameraEntity, Camera, cam);
 
+	Parent parent = {.entity = e};
+	ECS_ADD(ecs, cameraEntity, Parent, parent);
+
+	Mesh playerMesh = {0};
+	asset_ref_set(ecs, &playerMesh.meshRef, MESH_PROC_CAPSULE);
+	ECS_ADD(ecs, e, Mesh, playerMesh);
+	
     PlayerController player = {
         .lookSensitivity = 0.005f,
         .maxGroundSpeed  = 7.0f,
@@ -83,6 +95,7 @@ static void spawn_flying_camera(Ecs *ecs) {
         .airAccel        = 20.0f, 
         .groundFriction  = 6.0f,
         .jumpForce       = 4.5f,
+		.cameraEntity = cameraEntity,
     };
     ECS_ADD(ecs, e, PlayerController, player);
 
@@ -94,7 +107,6 @@ static void spawn_flying_camera(Ecs *ecs) {
     col.capsule.height = 1.8f;
 	col.mass = 75.0f;
     col.friction = 0.8f;
-    col.offset[1] = -1.7f;
 	col.categoryBits = 1;
     col.maskBits = 1;
     ECS_ADD(ecs, e, Collider, col);

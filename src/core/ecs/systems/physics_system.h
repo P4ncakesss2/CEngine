@@ -50,7 +50,7 @@ typedef struct PhysicsSystem {
     uint32_t *entityToMover;
     uint32_t  entityToMoverCapacity;
 
-    float gravity; 
+    vec3 gravity; 
 } PhysicsSystem;
 
 #define PHYSICS_NO_BODY  UINT32_MAX

@@ -202,10 +202,86 @@ static MeshAsset *make_plane(void) {
     return mesh;
 }
 
+static MeshAsset *make_capsule(float radius, float height, uint32_t rings, uint32_t segments) {
+    float cylinderHeight = height - 2.0f * radius;
+    if (cylinderHeight < 0.0f) cylinderHeight = 0.0f;
+    float halfCyl = cylinderHeight * 0.5f;
+
+    uint32_t ringsPerCap = rings;
+    uint32_t totalRings = ringsPerCap * 2 + 1;
+
+    uint32_t ringCount = (ringsPerCap + 1) * 2; 
+    MeshAsset *mesh = malloc(sizeof(MeshAsset));
+    if (!mesh) return NULL;
+
+    mesh->vertex_count = ringCount * (segments + 1);
+    mesh->vertices = malloc(mesh->vertex_count * sizeof(MeshVertex));
+    if (!mesh->vertices) { free(mesh); return NULL; }
+
+    uint32_t vi = 0;
+    for (uint32_t half = 0; half < 2; half++) {
+        for (uint32_t r = 0; r <= ringsPerCap; r++) {
+            float t = (float)r / (float)ringsPerCap;
+            float phi = half == 0 ? (t * 0.5f * (float)M_PI) : (0.5f * (float)M_PI + t * 0.5f * (float)M_PI);
+
+            float ringRadius = sinf(phi) * radius;
+            float y = cosf(phi) * radius;
+            y += (half == 0) ? halfCyl : -halfCyl;
+
+            float vCoord = (half == 0)
+                ? (t * (radius / (radius * 2.0f + cylinderHeight)))
+                : (1.0f - (1.0f - t) * (radius / (radius * 2.0f + cylinderHeight)));
+
+            for (uint32_t s = 0; s <= segments; s++) {
+                float u = (float)s / (float)segments;
+                float theta = u * 2.0f * (float)M_PI;
+
+                vec3 pos = {
+                    ringRadius * cosf(theta),
+                    y,
+                    ringRadius * sinf(theta),
+                };
+                glm_vec3_copy(pos, mesh->vertices[vi].position);
+
+                vec3 n = {
+                    sinf(phi) * cosf(theta),
+                    cosf(phi) * (half == 0 ? 1.0f : -1.0f) * (half == 0 ? 1.0f : 1.0f),
+                    sinf(phi) * sinf(theta),
+                };
+                float ny = cosf(half == 0 ? phi : ((float)M_PI - phi));
+                n[1] = ny;
+                glm_vec3_normalize(n);
+                glm_vec3_copy(n, mesh->vertices[vi].normal);
+
+                mesh->vertices[vi].uv1[0] = u;
+                mesh->vertices[vi].uv1[1] = vCoord;
+                vi++;
+            }
+        }
+    }
+
+    mesh->index_count = (ringCount - 1) * segments * 6;
+    mesh->indices = malloc(mesh->index_count * sizeof(uint32_t));
+    if (!mesh->indices) { free(mesh->vertices); free(mesh); return NULL; }
+
+    uint32_t ii = 0;
+    for (uint32_t r = 0; r < ringCount - 1; r++) {
+        for (uint32_t s = 0; s < segments; s++) {
+            uint32_t a = r * (segments + 1) + s;
+            uint32_t b = a + segments + 1;
+            mesh->indices[ii++] = a; mesh->indices[ii++] = a + 1; mesh->indices[ii++] = b;
+            mesh->indices[ii++] = a + 1; mesh->indices[ii++] = b + 1; mesh->indices[ii++] = b;
+        }
+    }
+
+    return mesh;
+}
+
 static void *mesh_load(const char *vpath, const void *data, size_t size) {
     if (strcmp(vpath, MESH_PROC_CUBE) == 0)   return make_cube();
     if (strcmp(vpath, MESH_PROC_SPHERE) == 0) return make_sphere(16, 24);
     if (strcmp(vpath, MESH_PROC_PLANE) == 0) return make_plane();
+    if (strcmp(vpath, MESH_PROC_CAPSULE) == 0) return make_capsule(0.3f, 1.8f, 8, 24);
 
     return load_cmsh(data, size);
 }

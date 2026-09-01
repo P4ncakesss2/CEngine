@@ -3,6 +3,7 @@
 #include "../system.h"
 #include "../ecs.h"
 #include "../components.h" 
+#include "cglm/vec3.h"
 #include "graphics/window.h"     
 #include <stdlib.h>
 #include <math.h>
@@ -66,8 +67,12 @@ static void player_controller_update(void *sys_data, SystemManager *mgr, float d
         if (window_key_pressed(win, GLFW_KEY_TAB)) {
             window_set_cursor_mode(win, win->cursorMode == CURSOR_MODE_NORMAL ? CURSOR_MODE_DISABLED : CURSOR_MODE_NORMAL);
         }
-
-        t->rotation[0] = player->pitch;
+        if (ecs_entity_alive(ecs, player->cameraEntity)) {
+            Transform *camT = ECS_GET(ecs, player->cameraEntity, Transform);
+            if (camT) {
+                camT->rotation[0] = player->pitch;
+            }
+        }
         t->rotation[1] = player->yaw;
         t->rotation[2] = 0.0f;
     }
@@ -98,11 +103,11 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         if (glm_vec3_norm2(wishDir) > 0.0f) {
             glm_vec3_normalize(wishDir);
         }
-
+        float rayDist = (col->capsule.height / 2.0f) + 0.1f;
         PhysicsRaycastHit hit;
         vec3 rayOrigin;
         glm_vec3_copy(t->position, rayOrigin);
-        vec3 rayDir = {0.0f, -1.75f, 0.0f};
+        vec3 rayDir = {0.0f, -rayDist, 0.0f};
 
         bool grounded = physics_system_raycast(phys, ecs, rayOrigin, rayDir, UINT64_MAX, &hit);
 
@@ -113,9 +118,11 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
             accelerate(mover->velocity, wishDir, player->maxAirSpeed, player->airAccel, fixed_dt);
         }
 
-        float verticalVelocity = mover->velocity[1];
-        verticalVelocity -= phys->gravity * fixed_dt;
+        vec3 scaledGravity;
+        glm_vec3_scale(phys->gravity, fixed_dt, scaledGravity);
+        glm_vec3_add(mover->velocity, scaledGravity, mover->velocity);
 
+        float verticalVelocity = mover->velocity[1];
         if (grounded && verticalVelocity < 0.0f) {
             verticalVelocity = -0.5f;
             if (window_key_down(win, GLFW_KEY_SPACE)) {

@@ -18,7 +18,7 @@ typedef struct {
 } Transform;
 
 typedef struct {
-    uint32_t entity;
+    Entity entity;
 } Parent;
 
 typedef struct {
@@ -136,6 +136,7 @@ typedef struct {
     float groundFriction;
     float jumpForce; 
     bool  wasGrounded;
+    Entity cameraEntity;
 } PlayerController;
 
 #endif
