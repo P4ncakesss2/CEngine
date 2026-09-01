@@ -168,10 +168,4 @@ EcsResult ecs_destroy_all_scene_instances(Ecs *w);
 
 bool ecs_find_scene_instance_by_anchor(const Ecs *w, Entity anchor, uint32_t *out_instance_id);
 
-static inline bool ecs_entity_is_locked(const Ecs *w, Entity e) {
-    uint32_t idx = ECS_ENTITY_INDEX(e);
-    if (idx >= w->high_water || !w->alive[idx]) return false;
-    return w->instanceIsNested[idx];
-}
-
 #endif
