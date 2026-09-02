@@ -270,6 +270,46 @@ static b3ShapeId create_collider(PhysicsSystem *sys, b3BodyId bodyId, const Coll
     }
 }
 
+// Handles entities whose Transform was written directly by gameplay code
+// this frame (teleports, respawns, cutscene placement, etc). Without this,
+// a teleport would either get physically resolved as an infinite-speed
+// move (bodies) or get blended from the old position over `alpha`
+// (interpolation), producing a visible slide/wall-clip instead of a clean
+// snap. Existing bodies/movers are hard-set to the new transform and their
+// previous-frame cache is snapped to match so interpolation doesn't blend
+// across the jump.
+static void apply_dirty_transforms(PhysicsSystem *sys, Ecs *w) {
+    ECS_EACH(w, ECS_MASK(COMPONENT_Transform, COMPONENT_RigidBody), e) {
+        Transform *t = ECS_GET(w, e, Transform);
+        if (!t->dirty) continue;
+
+        int32_t bodyIndex = find_body_index(sys, e);
+        if (bodyIndex >= 0) {
+            vec3 worldPos;
+            b3Quat worldRot;
+            compute_world_transform(w, e, t, worldPos, &worldRot);
+
+            b3Body_SetTransform(sys->bodies[bodyIndex].bodyId, to_b3pos(worldPos), worldRot);
+            sys->bodies[bodyIndex].prevPos = to_b3vec3(worldPos);
+            sys->bodies[bodyIndex].prevRot = worldRot;
+        }
+        t->dirty = false;
+    }
+
+    ECS_EACH(w, ECS_MASK(COMPONENT_Transform, COMPONENT_CharacterMover), e) {
+        Transform *t = ECS_GET(w, e, Transform);
+        if (!t->dirty) continue;
+
+        int32_t moverIndex = find_mover_index(sys, e);
+        if (moverIndex >= 0) {
+            b3Vec3 pos = to_b3vec3(t->position);
+            sys->movers[moverIndex].prevPos = pos;
+            sys->movers[moverIndex].currPos = pos;
+        }
+        t->dirty = false;
+    }
+}
+
 static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
     ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody, COMPONENT_Transform, COMPONENT_Collider), e) {
         RigidBody *rb = ECS_GET(w, e, RigidBody);
@@ -323,6 +363,9 @@ static void spawn_new_bodies(PhysicsSystem *sys, Ecs *w) {
         sys->bodies[index].prevRot  = worldRot;
         sys->entityToBody[e] = index;
         t->worldOverrideActive = false;
+        // Initial velocity was already baked into bodyDef above, so there's
+        // nothing pending for the velocity-sync pass to push.
+        rb->dirty = false;
     }
 }
 
@@ -506,7 +549,6 @@ static bool mover_capsule_from_collider(const Collider *collider, const vec3 ori
 }
 
 static bool physics_system_mover_plane_cb(b3ShapeId shapeId, const b3PlaneResult *plane, int planeCount, void *context) {
-    (void)shapeId;
     (void)planeCount;
     PhysicsMoverPlaneContext *ctx = context;
     if (ctx->count >= PHYSICS_MOVER_MAX_PLANES) return false;
@@ -517,7 +559,6 @@ static bool physics_system_mover_plane_cb(b3ShapeId shapeId, const b3PlaneResult
     cp->pushLimit    = FLT_MAX;
     cp->push         = 0.0f;
     cp->clipVelocity = true;
-
     return ctx->count < PHYSICS_MOVER_MAX_PLANES;
 }
 
@@ -599,17 +640,20 @@ static void physics_system_type_fixed_update(void* data, SystemManager* mgr, flo
     if (!sys || !w || fixed_dt < 0.0f) return;
     if (B3_IS_NULL(sys->world)) return;
 
+    apply_dirty_transforms(sys, w);
     spawn_new_bodies(sys, w);
     sync_movers(sys, w);
 
     ECS_EACH(w, ECS_MASK(COMPONENT_RigidBody), e) {
         RigidBody *rb = ECS_GET(w, e, RigidBody);
         if (!rb || rb->type == RIGID_BODY_Static) continue;
+        if (!rb->dirty) continue;
         int32_t bodyIndex = find_body_index(sys, e);
         if (bodyIndex < 0) continue;
         b3BodyId bodyId = sys->bodies[bodyIndex].bodyId;
         b3Body_SetLinearVelocity(bodyId, to_b3vec3(rb->linearVelocity));
         b3Body_SetAngularVelocity(bodyId, to_b3vec3(rb->angularVelocity));
+        rb->dirty = false;
     }
 
     for (uint32_t i = 0; i < sys->bodyCount; i++) {
@@ -630,6 +674,7 @@ static void physics_system_type_fixed_update(void* data, SystemManager* mgr, flo
         Transform* trans = ECS_GET(w, e, Transform);
         CharacterMover* mover = ECS_GET(w, e, CharacterMover);
         physics_system_move_mover(sys, w, col, trans->position, mover->velocity, fixed_dt, col->maskBits);
+        mover->dirty = false;
     }
 
     for (uint32_t i = 0; i < sys->moverCount; i++) {

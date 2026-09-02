@@ -1,6 +1,8 @@
 #include "app.h"
 #include <stdio.h>
 
+#define MAX_FIXED_STEPS_PER_FRAME 5
+
 int app_init(EngineApp* app, const AppConfig* config)
 {
     ContextCreateInfo ctx_info = {
@@ -130,9 +132,15 @@ void app_update(EngineApp* app)
     }
 
     app->fixedAccumulator += app->deltaTime;
-    while (app->fixedAccumulator >= app->fixedDeltaTime) {
+
+    int steps = 0;
+    while (app->fixedAccumulator >= app->fixedDeltaTime && steps < MAX_FIXED_STEPS_PER_FRAME) {
         system_manager_fixed_update(&app->systems, app->fixedDeltaTime);
         app->fixedAccumulator -= app->fixedDeltaTime;
+        steps++;
+    }
+    if (steps == MAX_FIXED_STEPS_PER_FRAME) {
+        app->fixedAccumulator = 0.0f;
     }
 
     float alpha = app->fixedAccumulator / app->fixedDeltaTime;

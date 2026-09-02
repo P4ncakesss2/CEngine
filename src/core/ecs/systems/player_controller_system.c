@@ -131,6 +131,7 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         }
 
         mover->velocity[1] = verticalVelocity;
+        mover->dirty = true;
     }
 }
 

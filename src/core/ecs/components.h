@@ -15,6 +15,13 @@ typedef struct {
 
     bool worldOverrideActive;
     mat4 worldOverride;
+
+    // Set true whenever gameplay code writes position/rotation directly
+    // (e.g. teleporting an entity). Systems that cache previous-frame state
+    // for interpolation (physics bodies, character movers) should snap their
+    // cached state to match and clear this flag rather than blending toward
+    // the new value.
+    bool dirty;
 } Transform;
 
 typedef struct {
@@ -82,10 +89,13 @@ typedef struct {
 
     vec3  linearVelocity;
     vec3  angularVelocity;
+
+    bool dirty;
 } RigidBody;
 
 typedef struct {
     vec3 velocity;
+    bool dirty;
 } CharacterMover;
 
 typedef enum {

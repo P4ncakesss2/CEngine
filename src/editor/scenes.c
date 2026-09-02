@@ -161,7 +161,7 @@ void scene_build_level1(Ecs *w)
 			vec3 pos = {px, py, 0.0f};
 
 			snprintf(nameBuf, sizeof(nameBuf), "PyramidBox_%d", boxIndex);
-			spawn_dynamic_box(w, nameBuf, pos, GLM_VEC3_ZERO, boxHalfExtents, 1.0f, GLM_VEC3_ZERO);
+			spawn_dynamic_box(w, nameBuf, pos, GLM_VEC3_ZERO, boxHalfExtents, 50.0f, GLM_VEC3_ZERO);
 
 			boxIndex++;
 		}
@@ -174,5 +174,5 @@ void scene_build_level1(Ecs *w)
 		12.0f
 	};
 	vec3 projectileVelocity = {0.0f, 0.0f, -35.0f};
-	spawn_dynamic_box(w, "Cannonball", projectilePos, GLM_VEC3_ZERO, boxHalfExtents, 15.0f, projectileVelocity);
+	spawn_dynamic_box(w, "Cannonball", projectilePos, GLM_VEC3_ZERO, boxHalfExtents, 50.0f, projectileVelocity);
 }
