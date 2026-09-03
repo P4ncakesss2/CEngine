@@ -441,24 +441,14 @@ static GraphicsResult create_logical_device(Context* ctx) {
 
     DeviceFeatureChain c;
     device_feature_chain_init(&c);
-    c.vk11.shaderDrawParameters                          = VK_TRUE;
-    c.vk12.drawIndirectCount                             = VK_TRUE;
-    c.vk12.descriptorIndexing                            = VK_TRUE;
-    c.vk12.descriptorBindingPartiallyBound                = VK_TRUE;
-    c.vk12.descriptorBindingUpdateUnusedWhilePending      = VK_TRUE;
-    c.vk12.runtimeDescriptorArray                        = VK_TRUE;
-    c.vk12.descriptorBindingSampledImageUpdateAfterBind   = VK_TRUE;
-    c.vk12.descriptorBindingStorageImageUpdateAfterBind   = VK_TRUE;
-    c.vk12.shaderSampledImageArrayNonUniformIndexing      = VK_TRUE;
-    c.vk12.bufferDeviceAddress                           = VK_TRUE;
-    c.extDynState.extendedDynamicState                   = VK_TRUE;
-    c.vk13.dynamicRendering                              = VK_TRUE;
-    c.vk13.synchronization2                              = VK_TRUE;
-    c.features2.features.samplerAnisotropy               = VK_TRUE;
-    c.features2.features.fillModeNonSolid                = VK_TRUE;
-    c.features2.features.multiDrawIndirect               = VK_TRUE;
-    c.features2.features.sampleRateShading                = VK_TRUE;
-
+    c.vk13.dynamicRendering = true;
+    c.vk12.descriptorBindingSampledImageUpdateAfterBind = true;
+    c.vk12.descriptorBindingPartiallyBound = true;
+    c.features2.features.samplerAnisotropy = true;
+    c.vk12.bufferDeviceAddress = true;
+    c.vk12.shaderSampledImageArrayNonUniformIndexing = true;
+    c.vk12.runtimeDescriptorArray = true;
+    
     uint32_t deviceExtCount = 0;
     const char** deviceExts = get_device_extensions(ctx, &deviceExtCount);
     if (!deviceExts) return (GraphicsResult){ GRAPHICS_ERR_OUT_OF_MEMORY, VK_SUCCESS };

@@ -11,6 +11,8 @@
 #define PHYSICS_MOVER_MAX_PLANES 16
 #define PHYSICS_MOVER_SUBITERATIONS 5
 #define PHYSICS_MOVER_SKIN 0.01f
+#define PHYSICS_MOVER_FLOOR_NORMAL_Y    0.7f
+#define PHYSICS_MOVER_CEILING_NORMAL_Y -0.7f
 
 static b3Vec3 to_b3vec3(const vec3 v) {
     b3Vec3 out;
@@ -562,8 +564,26 @@ static bool physics_system_mover_plane_cb(b3ShapeId shapeId, const b3PlaneResult
     return ctx->count < PHYSICS_MOVER_MAX_PLANES;
 }
 
-static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *collider, vec3 origin, vec3 velocity, float dt, uint64_t categoryMask) {
+typedef struct {
+    bool isFloor;
+    bool isWall;
+    bool isCeiling;
+} PhysicsMoverContactFlags;
+
+static void physics_system_classify_plane(const b3Plane *plane, PhysicsMoverContactFlags *flags) {
+    float ny = plane->normal.y;
+    if (ny >= PHYSICS_MOVER_FLOOR_NORMAL_Y) {
+        flags->isFloor = true;
+    } else if (ny <= PHYSICS_MOVER_CEILING_NORMAL_Y) {
+        flags->isCeiling = true;
+    } else {
+        flags->isWall = true;
+    }
+}
+
+static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider *collider, vec3 origin, vec3 velocity, float dt, uint64_t categoryMask, PhysicsMoverContactFlags *outFlags) {
     (void)w;
+    memset(outFlags, 0, sizeof(*outFlags));
     if (!sys || B3_IS_NULL(sys->world) || !collider || dt <= 0.0f) return;
 
     b3Capsule capsule;
@@ -587,6 +607,10 @@ static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider
         planeCtx.count = 0;
         b3World_CollideMover(sys->world, b3Pos_zero, &capsule, filter, physics_system_mover_plane_cb, &planeCtx);
         if (planeCtx.count == 0) break;
+
+        for (int p = 0; p < planeCtx.count; ++p) {
+            physics_system_classify_plane(&planeCtx.planes[p].plane, outFlags);
+        }
 
         b3PlaneSolverResult solved = b3SolvePlanes(b3Vec3_zero, planeCtx.planes, planeCtx.count);
         finalVelocity = b3ClipVector(finalVelocity, planeCtx.planes, planeCtx.count);
@@ -673,7 +697,13 @@ static void physics_system_type_fixed_update(void* data, SystemManager* mgr, flo
         Collider* col = ECS_GET(w, e, Collider);
         Transform* trans = ECS_GET(w, e, Transform);
         CharacterMover* mover = ECS_GET(w, e, CharacterMover);
-        physics_system_move_mover(sys, w, col, trans->position, mover->velocity, fixed_dt, col->maskBits);
+
+        PhysicsMoverContactFlags flags;
+        physics_system_move_mover(sys, w, col, trans->position, mover->velocity, fixed_dt, col->maskBits, &flags);
+
+        mover->isFloor   = flags.isFloor;
+        mover->isWall    = flags.isWall;
+        mover->isCeiling = flags.isCeiling;
         mover->dirty = false;
     }
 

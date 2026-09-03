@@ -26,7 +26,19 @@ static void compute_local_to_world(const Transform *t, mat4 parent_mat, mat4 out
 
 static void update_transform(Ecs *w, Entity e, uint8_t *state, int depth) {
     uint32_t idx = ECS_ENTITY_INDEX(e);
-    if (state[idx] == STATE_UPDATED || state[idx] == STATE_COMPUTING) {
+    if (state[idx] == STATE_UPDATED) {
+        return;
+    }
+
+    if (state[idx] == STATE_COMPUTING) {
+        fprintf(stderr, "transform_system: parent cycle detected at entity %u, breaking cycle\n", e);
+        Transform *wt = ECS_GET(w, e, Transform);
+        if (wt) {
+            mat4 identity;
+            glm_mat4_identity(identity);
+            compute_local_to_world(wt, identity, wt->matrix);
+        }
+        state[idx] = STATE_UPDATED;
         return;
     }
 
@@ -47,7 +59,6 @@ static void update_transform(Ecs *w, Entity e, uint8_t *state, int depth) {
         state[idx] = STATE_UPDATED;
         return;
     }
-
     if (wt->worldOverrideActive) {
         mat4 m;
         glm_mat4_copy(wt->worldOverride, m);

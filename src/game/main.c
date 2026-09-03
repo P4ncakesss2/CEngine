@@ -49,7 +49,7 @@ int main(int argc, char **argv)
         .renderTarget = RENDER_TARGET_SWAPCHAIN,
         .imgui_draw_callback = &render_ui,
         .imgui_userdata = &app,
-        .validationEnabled = false,
+        .validationEnabled = true,
         .initialPakPath = "game.pak",
         .initialScenePath = "scenes/level1.scn",
         .fixedUpdateRate = 60.0f,

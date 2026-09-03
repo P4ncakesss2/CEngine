@@ -96,6 +96,10 @@ typedef struct {
 typedef struct {
     vec3 velocity;
     bool dirty;
+
+    bool isFloor;
+    bool isWall;
+    bool isCeiling;
 } CharacterMover;
 
 typedef enum {

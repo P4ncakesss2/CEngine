@@ -1008,8 +1008,6 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[0]);
             draw_items(r, cmd, cb->address, ob->address, r->drawItems, r->drawItemCount);
 
-            /* transparentDrawItems is depth-sorted back-to-front; draw it as
-             * one ordered list so blending composites correctly. */
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[0]);
             draw_items(r, cmd, cb->address, ob->address, r->transparentDrawItems, r->transparentDrawItemCount);
 
@@ -1120,15 +1118,34 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[msaaIdx]);
         draw_items(r, cmd, cb->address, ob->address, r->drawItems, r->drawItemCount);
 
-        /* transparentDrawItems is depth-sorted back-to-front; draw it as one
-         * ordered list so blending composites correctly. */
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[msaaIdx]);
         draw_items(r, cmd, cb->address, ob->address, r->transparentDrawItems, r->transparentDrawItemCount);
 
-        if (r->uiActive) {
-            ui_render(cmd);
-        }
         vkCmdEndRendering(cmd);
+
+        if (r->uiActive) {
+            VkRenderingAttachmentInfo uiAttachment = {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = msaaEnabled ? window->resolveImage.view : window->colorImage.view,
+                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            };
+
+            VkRenderingInfo uiInfo = {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .renderArea = { .offset = { 0, 0 }, .extent = window->renderExtent },
+                .layerCount = 1,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &uiAttachment,
+            };
+
+            vkCmdBeginRendering(cmd, &uiInfo);
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            ui_render(cmd);
+            vkCmdEndRendering(cmd);
+        }
     }
 
     barrier_image(cmd, blitSrcImage, VK_IMAGE_ASPECT_COLOR_BIT,

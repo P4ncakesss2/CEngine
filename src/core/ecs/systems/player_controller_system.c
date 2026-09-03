@@ -9,6 +9,8 @@
 #include <math.h>
 #include "physics_system.h"
 
+#define PLAYER_GROUND_SNAP_VELOCITY -0.5f
+
 typedef struct {
     char dummy; 
 } PlayerControllerSystem;
@@ -82,14 +84,13 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
     (void)sys_data;
     Ecs *ecs = mgr->ecs;
     Window *win = mgr->window;
-
     PhysicsSystem *phys = SYSTEM_GET(mgr, Physics);
-
     ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform, COMPONENT_Collider, COMPONENT_CharacterMover), e) {
         PlayerController *player = ECS_GET(ecs, e, PlayerController);
         Transform *t = ECS_GET(ecs, e, Transform);
         Collider *col = ECS_GET(ecs, e, Collider);
         CharacterMover* mover = ECS_GET(ecs, e, CharacterMover);
+        (void)t; (void)col;
 
         vec3 forward = { -sinf(player->yaw), 0.0f, -cosf(player->yaw) };
         vec3 right   = { cosf(player->yaw), 0.0f, -sinf(player->yaw) };
@@ -103,13 +104,8 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         if (glm_vec3_norm2(wishDir) > 0.0f) {
             glm_vec3_normalize(wishDir);
         }
-        float rayDist = (col->capsule.height / 2.0f) + 0.1f;
-        PhysicsRaycastHit hit;
-        vec3 rayOrigin;
-        glm_vec3_copy(t->position, rayOrigin);
-        vec3 rayDir = {0.0f, -rayDist, 0.0f};
 
-        bool grounded = physics_system_raycast(phys, ecs, rayOrigin, rayDir, UINT64_MAX, &hit);
+        bool grounded = mover->isFloor;
 
         if (grounded) {
             apply_friction(mover->velocity, player->groundFriction, fixed_dt);
@@ -122,15 +118,14 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         glm_vec3_scale(phys->gravity, fixed_dt, scaledGravity);
         glm_vec3_add(mover->velocity, scaledGravity, mover->velocity);
 
-        float verticalVelocity = mover->velocity[1];
-        if (grounded && verticalVelocity < 0.0f) {
-            verticalVelocity = -0.5f;
-            if (window_key_down(win, GLFW_KEY_SPACE)) {
-                verticalVelocity = player->jumpForce;
-            }
+        if (grounded && window_key_down(win, GLFW_KEY_SPACE)) {
+            mover->velocity[1] = player->jumpForce;
+        } else if (grounded && mover->velocity[1] < 0.0f) {
+            mover->velocity[1] = PLAYER_GROUND_SNAP_VELOCITY;
+        } else if (mover->isCeiling && mover->velocity[1] > 0.0f) {
+            mover->velocity[1] = 0.0f; // bonk
         }
 
-        mover->velocity[1] = verticalVelocity;
         mover->dirty = true;
     }
 }
