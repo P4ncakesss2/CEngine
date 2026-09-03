@@ -41,6 +41,7 @@ const char *graphics_err_str(GraphicsError err) {
         case GRAPHICS_ERR_PIPELINE_CACHE_CREATION_FAILED: return "Failed to create pipeline cache";
         case GRAPHICS_ERR_PIPELINE_CREATION_FAILED: return "Failed to create pipeline";
         case GRAPHICS_ERR_PIPELINE_LAYOUT_CREATION_FAILED: return "Failed to create pipeline layout";
+        case GRAPHICS_ERR_PIPELINE_CACHE_SAVE_FAILED: return "Failed to save pipeline cache";
 
         case GRAPHICS_ERR_DESCRIPTOR_SET_LAYOUT_CREATION_FAILED: return "Failed to create descriptor set layout";
         case GRAPHICS_ERR_DESCRIPTOR_POOL_CREATION_FAILED: return "Failed to create descriptor pool";

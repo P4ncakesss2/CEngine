@@ -47,14 +47,39 @@ void pipeline_layout_destroy(Context* ctx, VkPipelineLayout layout) {
 GraphicsResult pipeline_create_shader_module(Context* ctx, const unsigned char* code, size_t size, VkShaderModule* outModule) {
     *outModule = VK_NULL_HANDLE;
 
+    // SPIR-V is a stream of 32-bit words. The Vulkan spec requires pCode to
+    // point at 4-byte-aligned memory; a size that isn't a multiple of 4 also
+    // means the blob isn't valid SPIR-V at all. `code` here can come from an
+    // arbitrary VFS backend, so neither can be assumed - a caller handing us
+    // a buffer from a byte-oriented reader (e.g. one that returns pointers
+    // into a memory-mapped file, or that reads into a `char*` with no
+    // alignment guarantee) would otherwise hand this straight to the driver
+    // as-is, which is UB and has previously produced garbage/crashes on
+    // strict-alignment or SIMD-heavy validation layers.
+    if (size == 0 || size % sizeof(uint32_t) != 0) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_SHADER_MODULE_CREATION_FAILED, .vk = VK_ERROR_UNKNOWN };
+    }
+
+    const uint32_t* pCode = (const uint32_t*)code;
+    uint32_t* aligned = NULL;
+    if (((uintptr_t)code) % _Alignof(uint32_t) != 0) {
+        aligned = (uint32_t*)malloc(size);
+        if (!aligned) {
+            return (GraphicsResult){ .err = GRAPHICS_ERR_SHADER_MODULE_CREATION_FAILED, .vk = VK_ERROR_OUT_OF_HOST_MEMORY };
+        }
+        memcpy(aligned, code, size);
+        pCode = aligned;
+    }
+
     VkShaderModuleCreateInfo info = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = size,
-        .pCode = (const uint32_t*)code,
+        .pCode = pCode,
     };
 
     VkShaderModule module;
     VkResult result = vkCreateShaderModule(ctx->device, &info, NULL, &module);
+    free(aligned);
     if (result != VK_SUCCESS) {
         return (GraphicsResult){ .err = GRAPHICS_ERR_SHADER_MODULE_CREATION_FAILED, .vk = result };
     }
@@ -75,6 +100,92 @@ GraphicsResult pipeline_load_shader_from_vfs(Context* ctx, Vfs* vfs, const char*
     GraphicsResult res = pipeline_create_shader_module(ctx, bytes, size, outModule);
     free(bytes);
     return res;
+}
+
+GraphicsResult pipeline_cache_create(Context* ctx, const char* filepath, VkPipelineCache* outCache) {
+    *outCache = VK_NULL_HANDLE;
+
+    void* initialData = NULL;
+    size_t initialSize = 0;
+
+    if (filepath) {
+        FILE* f = fopen(filepath, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (sz > 0) {
+                initialData = malloc((size_t)sz);
+                if (initialData && fread(initialData, 1, (size_t)sz, f) == (size_t)sz) {
+                    initialSize = (size_t)sz;
+                } else {
+                    free(initialData);
+                    initialData = NULL;
+                }
+            }
+            fclose(f);
+        }
+    }
+
+    VkPipelineCacheCreateInfo cacheInfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+        .initialDataSize = initialSize,
+        .pInitialData = initialData,
+    };
+
+    VkPipelineCache cache;
+    VkResult vkRes = vkCreatePipelineCache(ctx->device, &cacheInfo, NULL, &cache);
+    free(initialData);
+
+    if (vkRes != VK_SUCCESS) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_PIPELINE_CACHE_CREATION_FAILED, .vk = vkRes };
+    }
+
+    *outCache = cache;
+    return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
+}
+
+GraphicsResult pipeline_cache_save(Context* ctx, VkPipelineCache cache, const char* filepath) {
+    if (cache == VK_NULL_HANDLE || !filepath) {
+        return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
+    }
+
+    size_t dataSize = 0;
+    VkResult vkRes = vkGetPipelineCacheData(ctx->device, cache, &dataSize, NULL);
+    if (vkRes != VK_SUCCESS || dataSize == 0) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_PIPELINE_CACHE_SAVE_FAILED, .vk = vkRes };
+    }
+
+    void* data = malloc(dataSize);
+    if (!data) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_PIPELINE_CACHE_SAVE_FAILED, .vk = VK_ERROR_OUT_OF_HOST_MEMORY };
+    }
+
+    vkRes = vkGetPipelineCacheData(ctx->device, cache, &dataSize, data);
+    if (vkRes != VK_SUCCESS) {
+        free(data);
+        return (GraphicsResult){ .err = GRAPHICS_ERR_PIPELINE_CACHE_SAVE_FAILED, .vk = vkRes };
+    }
+
+    FILE* f = fopen(filepath, "wb");
+    if (!f) {
+        free(data);
+        return (GraphicsResult){ .err = GRAPHICS_ERR_IO, .vk = VK_SUCCESS };
+    }
+    size_t written = fwrite(data, 1, dataSize, f);
+    fclose(f);
+    free(data);
+
+    if (written != dataSize) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_IO, .vk = VK_SUCCESS };
+    }
+    return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
+}
+
+void pipeline_cache_destroy(Context* ctx, VkPipelineCache cache) {
+    if (cache != VK_NULL_HANDLE) {
+        vkDestroyPipelineCache(ctx->device, cache, NULL);
+    }
 }
 
 void pipeline_builder_init(PipelineBuilder* builder) {
@@ -236,7 +347,7 @@ void pipeline_builder_set_layout(PipelineBuilder* builder, VkPipelineLayout layo
     builder->layout = layout;
 }
 
-GraphicsResult pipeline_builder_build(Context* ctx, const PipelineBuilder* builder, VkPipeline* outPipeline) {
+GraphicsResult pipeline_builder_build(Context* ctx, const PipelineBuilder* builder, VkPipelineCache cache, VkPipeline* outPipeline) {
     VkGraphicsPipelineCreateInfo pipelineInfo = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &builder->renderingInfo,
@@ -251,9 +362,11 @@ GraphicsResult pipeline_builder_build(Context* ctx, const PipelineBuilder* build
         .pColorBlendState = &builder->colorBlending,
         .pDynamicState = &builder->dynamicStateInfo,
         .layout = builder->layout,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = -1,
     };
 
-    VkResult vkRes = vkCreateGraphicsPipelines(ctx->device, VK_NULL_HANDLE, 1, &pipelineInfo, NULL, outPipeline);
+    VkResult vkRes = vkCreateGraphicsPipelines(ctx->device, cache, 1, &pipelineInfo, NULL, outPipeline);
     if (vkRes != VK_SUCCESS) {
         return (GraphicsResult){ .err = GRAPHICS_ERR_PIPELINE_CREATION_FAILED, .vk = vkRes };
     }

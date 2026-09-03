@@ -150,6 +150,7 @@ typedef struct Renderer {
     VkPipeline       geometryPipelines[MSAA_LEVEL_COUNT];
     VkPipeline       transparentPipelines[MSAA_LEVEL_COUNT];
     VkPipelineLayout pipelineLayout;
+    VkPipelineCache  pipelineCache;
 
     UiDrawFn uiDrawFn;
     void*    uiDrawUserdata;

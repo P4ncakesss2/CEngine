@@ -8,12 +8,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 #include "ui_backend.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+#define PIPELINE_CACHE_FILEPATH "pipeline_cache.bin"
 
 static inline void* gpu_slot_at(GpuSlotTable* t, uint32_t idx) {
     return (uint8_t*)t->slots + (size_t)idx * t->elemSize;
@@ -375,7 +372,7 @@ static GraphicsResult create_pipeline_set(Renderer* r, Context* ctx, Window* win
     prepassBuilder.renderingInfo.colorAttachmentCount = 0;
     prepassBuilder.renderingInfo.pColorAttachmentFormats = NULL;
 
-    GraphicsResult prepassRes = pipeline_builder_build(ctx, &prepassBuilder, &r->depthPrepassPipelines[levelIndex]);
+    GraphicsResult prepassRes = pipeline_builder_build(ctx, &prepassBuilder, r->pipelineCache, &r->depthPrepassPipelines[levelIndex]);
     if (prepassRes.err != GRAPHICS_OK) return prepassRes;
 
     PipelineBuilder geometryBuilder;
@@ -393,7 +390,7 @@ static GraphicsResult create_pipeline_set(Renderer* r, Context* ctx, Window* win
     pipeline_builder_set_multisampling(&geometryBuilder, samples);
     pipeline_builder_set_cull_mode(&geometryBuilder, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
-    GraphicsResult geometryRes = pipeline_builder_build(ctx, &geometryBuilder, &r->geometryPipelines[levelIndex]);
+    GraphicsResult geometryRes = pipeline_builder_build(ctx, &geometryBuilder, r->pipelineCache, &r->geometryPipelines[levelIndex]);
     if (geometryRes.err != GRAPHICS_OK) return geometryRes;
 
     PipelineBuilder transparentBuilder;
@@ -412,7 +409,7 @@ static GraphicsResult create_pipeline_set(Renderer* r, Context* ctx, Window* win
     pipeline_builder_enable_alpha_blend(&transparentBuilder, true);
     pipeline_builder_set_cull_mode(&transparentBuilder, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
-    GraphicsResult transparentRes = pipeline_builder_build(ctx, &transparentBuilder, &r->transparentPipelines[levelIndex]);
+    GraphicsResult transparentRes = pipeline_builder_build(ctx, &transparentBuilder, r->pipelineCache, &r->transparentPipelines[levelIndex]);
     if (transparentRes.err != GRAPHICS_OK) return transparentRes;
 
     return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
@@ -433,6 +430,12 @@ static GraphicsResult create_pipelines(Renderer* r, Context* ctx, Window* window
         vkDestroyShaderModule(ctx->device, shaderModule, NULL);
         return pipelineRes;
     }
+
+    GraphicsResult cacheRes = pipeline_cache_create(ctx, PIPELINE_CACHE_FILEPATH, &r->pipelineCache);
+    if (cacheRes.err != GRAPHICS_OK) {
+        r->pipelineCache = VK_NULL_HANDLE;
+    }
+
     uint32_t maxLevelIndex = msaa_level_index(ctx->maxMsaaSamples);
     for (uint32_t levelIndex = 0; levelIndex <= maxLevelIndex; levelIndex++) {
         GraphicsResult res = create_pipeline_set(r, ctx, window, shaderModule, ALL_MSAA_LEVELS[levelIndex], levelIndex);
@@ -453,6 +456,10 @@ static void destroy_pipelines(Renderer* r, Context* ctx) {
         if (r->transparentPipelines[i])  vkDestroyPipeline(ctx->device, r->transparentPipelines[i], NULL);
     }
     vkDestroyPipelineLayout(ctx->device, r->pipelineLayout, NULL);
+
+    pipeline_cache_save(ctx, r->pipelineCache, PIPELINE_CACHE_FILEPATH);
+    pipeline_cache_destroy(ctx, r->pipelineCache);
+    r->pipelineCache = VK_NULL_HANDLE;
 }
 
 static GraphicsResult create_frame_buffer(Context* ctx, VkDeviceSize size, FrameObjectBuffer* out) {

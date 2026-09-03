@@ -2,3 +2,4 @@ build/
 .cache/
 imgui.ini
 game.pak
+pipeline_cache.bin

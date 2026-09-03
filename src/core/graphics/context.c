@@ -87,13 +87,17 @@ static bool check_validation_layer_support(void) {
 
 static const char** get_required_extensions(Context* ctx, uint32_t* out_count) {
     uint32_t base_count = 0;
-    const char** extensions = malloc(sizeof(*extensions) * 2);
+    const char** extensions = malloc(sizeof(*extensions) * 4); // space for all the extensions possible atp
     if (!extensions) return NULL;
     if (ctx->validationEnabled) {
         extensions[base_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
 #ifdef __APPLE__
-    extensions[base_count++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+        extensions[base_count++] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+    #else
+        extensions[base_count++] = "VK_KHR_portability_subset";
+    #endif
 #endif
     uint32_t window_count = 0;
     const char** window = window_get_vulkan_extensions(&window_count);
@@ -334,7 +338,7 @@ static uint32_t rate_device_suitability(VkPhysicalDevice device, const VkSurface
     DeviceFeatureChain c;
     device_feature_chain_init(&c);
     vkGetPhysicalDeviceFeatures2(device, &c.features2);
-    if (!c.vk13.dynamicRendering || !c.extDynState.extendedDynamicState ||
+    if (!c.vk13.dynamicRendering ||
         !c.features2.features.samplerAnisotropy || !c.vk12.bufferDeviceAddress)
         return 0;
 
@@ -448,7 +452,7 @@ static GraphicsResult create_logical_device(Context* ctx) {
     c.vk12.bufferDeviceAddress = true;
     c.vk12.shaderSampledImageArrayNonUniformIndexing = true;
     c.vk12.runtimeDescriptorArray = true;
-    
+
     uint32_t deviceExtCount = 0;
     const char** deviceExts = get_device_extensions(ctx, &deviceExtCount);
     if (!deviceExts) return (GraphicsResult){ GRAPHICS_ERR_OUT_OF_MEMORY, VK_SUCCESS };

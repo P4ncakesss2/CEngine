@@ -27,6 +27,10 @@ void pipeline_layout_destroy(Context* ctx, VkPipelineLayout layout);
 GraphicsResult pipeline_create_shader_module(Context* ctx, const unsigned char* code, size_t size, VkShaderModule* outModule);
 GraphicsResult pipeline_load_shader_from_vfs(Context* ctx, Vfs* vfs, const char* vpath, VkShaderModule* outModule);
 
+GraphicsResult pipeline_cache_create(Context* ctx, const char* filepath, VkPipelineCache* outCache);
+GraphicsResult pipeline_cache_save(Context* ctx, VkPipelineCache cache, const char* filepath);
+void pipeline_cache_destroy(Context* ctx, VkPipelineCache cache);
+
 #define PIPELINE_MAX_SHADER_STAGES 4
 #define PIPELINE_MAX_VERTEX_BINDINGS 8
 #define PIPELINE_MAX_VERTEX_ATTRIBUTES 8
@@ -79,6 +83,6 @@ void pipeline_builder_set_color_attachment_format(PipelineBuilder* builder, VkFo
 void pipeline_builder_set_layout(PipelineBuilder* builder, VkPipelineLayout layout);
 void pipeline_builder_enable_alpha_blend(PipelineBuilder* builder, bool enabled);
 
-GraphicsResult pipeline_builder_build(Context* ctx, const PipelineBuilder* builder, VkPipeline* outPipeline);
+GraphicsResult pipeline_builder_build(Context* ctx, const PipelineBuilder* builder, VkPipelineCache cache, VkPipeline* outPipeline);
 
 #endif
