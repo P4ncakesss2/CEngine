@@ -1,7 +1,9 @@
 #include "app.h"
 #include <stdio.h>
+#include "cvar.h"
 
-#define MAX_FIXED_STEPS_PER_FRAME 5
+DEFINE_CVAR_INT(sim_maxFixedStepsPerFrame, "sim_maxFixedStepsPerFrame", 5)
+DEFINE_CVAR_FLOAT(sim_fixedUpdateRate, "sim_fixedUpdateRate", 60.0f);
 
 int app_init(EngineApp* app, const AppConfig* config)
 {
@@ -48,7 +50,7 @@ int app_init(EngineApp* app, const AppConfig* config)
         goto err_vfs;
     }
 
-    GraphicsResult ren_result = renderer_init(&app->renderer, &app->context, &app->window, &app->assets, &app->ecs, config->renderTarget, config->imgui_draw_callback, config->imgui_userdata);
+    GraphicsResult ren_result = renderer_init(&app->renderer, &app->context, &app->window, &app->assets, &app->ecs, config->imgui_draw_callback, config->imgui_userdata);
     if (ren_result.err != GRAPHICS_OK) {
         fprintf(stderr, "Failed to create renderer: %s (VkResult: %s)\n", graphics_err_str(ren_result.err), vk_result_str(ren_result.vk));
         goto err_assets;
@@ -73,7 +75,7 @@ int app_init(EngineApp* app, const AppConfig* config)
 
     app->lastTime = (float)window_get_time();
     app->fixedAccumulator = 0.0f;
-    app->fixedDeltaTime = config->fixedUpdateRate > 0.0f ? 1.0f / config->fixedUpdateRate : 1.0f / 60.0f;
+    app->fixedDeltaTime = sim_fixedUpdateRate.value.f > 0.0f ? 1.0f / sim_fixedUpdateRate.value.f  : 1.0f / 60.0f;
 
     return 0; 
 
@@ -119,6 +121,7 @@ void app_update(EngineApp* app)
     app->currentTime = (float)window_get_time();
     app->deltaTime = app->currentTime - app->lastTime;
     app->lastTime = app->currentTime;
+    app->fixedDeltaTime = sim_fixedUpdateRate.value.f > 0.0f ? 1.0f / sim_fixedUpdateRate.value.f  : 1.0f / 60.0f;
 
     if (app->deltaTime > 0.25f)
         app->deltaTime = 0.25f;
@@ -134,12 +137,12 @@ void app_update(EngineApp* app)
     app->fixedAccumulator += app->deltaTime;
 
     int steps = 0;
-    while (app->fixedAccumulator >= app->fixedDeltaTime && steps < MAX_FIXED_STEPS_PER_FRAME) {
+    while (app->fixedAccumulator >= app->fixedDeltaTime && steps < sim_maxFixedStepsPerFrame.value.i) {
         system_manager_fixed_update(&app->systems, app->fixedDeltaTime);
         app->fixedAccumulator -= app->fixedDeltaTime;
         steps++;
     }
-    if (steps == MAX_FIXED_STEPS_PER_FRAME) {
+    if (steps == sim_maxFixedStepsPerFrame.value.i) {
         app->fixedAccumulator = 0.0f;
     }
 

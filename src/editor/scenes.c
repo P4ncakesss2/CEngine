@@ -92,13 +92,10 @@ static void spawn_flying_camera(Ecs *ecs) {
     Collider col = { .type = COLLIDER_Capsule };
     col.capsule.radius = 0.3f;
     col.capsule.height = 1.8f;
-	col.mass = 75.0f;
-    col.friction = 0.8f;
 	col.categoryBits = 1;
     col.maskBits = 1;
     ECS_ADD(ecs, e, Collider, col);
 }
-
 
 void scene_build_level1(Ecs *w)
 {

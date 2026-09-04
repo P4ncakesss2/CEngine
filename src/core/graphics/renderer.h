@@ -102,19 +102,6 @@ typedef struct GpuSlotTable {
 } GpuSlotTable;
 
 typedef void (*UiDrawFn)(void* userdata);
-typedef enum RenderTarget {
-    RENDER_TARGET_SWAPCHAIN = 0,
-    RENDER_TARGET_OFFSCREEN,
-} RenderTarget;
-
-typedef struct SceneTarget {
-    Image       color;
-    Image       depth;
-    VkSampler   sampler;
-    void*       imguiTexId;
-    VkExtent2D  extent;
-    VkExtent2D  allocatedExtent;
-} SceneTarget;
 
 typedef struct Renderer {
     Context*      ctx;
@@ -159,16 +146,12 @@ typedef struct Renderer {
     uint32_t currentFrame;
 
     bool         uiActive;
-    RenderTarget renderTarget;
-    SceneTarget  sceneTarget;
 } Renderer;
 
 
-GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetManager* assets, Ecs* ecs,
-                              RenderTarget renderTarget, UiDrawFn uiDrawFn, void* uiDrawUserdata);
+GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetManager* assets, Ecs* ecs,UiDrawFn uiDrawFn, void* uiDrawUserdata);
 void renderer_free(Renderer* r);
 void renderer_clear_gpu_cache(Renderer* r);
-void renderer_resize_scene_target(Renderer* r, uint32_t width, uint32_t height);
 
 VkExtent2D renderer_get_extent(const Renderer* r);
 void  renderer_draw_frame(Renderer* r, const RenderObject* objects, const MaterialObject* materials, uint32_t count, mat4 viewproj, vec3 camPos, bool camValid);

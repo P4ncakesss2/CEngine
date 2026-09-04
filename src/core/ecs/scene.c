@@ -7,24 +7,18 @@ static EcsResult scene_manager_load_base_scene(SceneManager *mgr, const char *vp
     ecs_destroy_all_scene_instances(mgr->world);
     mgr->baseInstanceId = ECS_INVALID_SCENE_INSTANCE;
 
-    asset_manager_clear_scope(mgr->assets, ASSET_SCOPE_SCENE);
-    asset_manager_begin_scope(mgr->assets, ASSET_SCOPE_SCENE);
-
     AssetHandle sceneHandle;
     AssetResult assetResult = asset_load(mgr->assets, ASSET_TYPE_Scene, vpath, &sceneHandle);
     if (assetResult != ASSET_OK) {
-        asset_manager_end_scope(mgr->assets);
         return ECS_ERR_IO;
     }
     Ecs *scene = asset_get(mgr->assets, sceneHandle, ASSET_TYPE_Scene);
     if (!scene) {
-        asset_manager_end_scope(mgr->assets);
         return ECS_ERR_IO;
     }
 
     uint32_t instanceId;
     EcsResult r = ecs_instantiate(mgr->world, mgr->assets, scene, ECS_INVALID_ENTITY, false, &instanceId);
-    asset_manager_end_scope(mgr->assets);
     if (r != ECS_OK) return r;
 
     mgr->baseInstanceId = instanceId;
@@ -134,22 +128,17 @@ EcsResult scene_manager_spawn_scene(SceneManager *mgr, const char *vpath,
     if (anchor != ECS_INVALID_ENTITY && !ecs_entity_alive(mgr->world, anchor))
         return ECS_ERR_INVALID_ENTITY;
 
-    asset_manager_begin_scope(mgr->assets, ASSET_SCOPE_SCENE);
-
     AssetHandle sceneHandle;
     if (asset_load(mgr->assets, ASSET_TYPE_Scene, vpath, &sceneHandle) != ASSET_OK) {
-        asset_manager_end_scope(mgr->assets);
         return ECS_ERR_IO;
     }
     Ecs *scene = asset_get(mgr->assets, sceneHandle, ASSET_TYPE_Scene);
     if (!scene) {
-        asset_manager_end_scope(mgr->assets);
         return ECS_ERR_IO;
     }
 
     uint32_t instanceId;
     EcsResult r = ecs_instantiate(mgr->world, mgr->assets, scene, anchor, true, &instanceId);
-    asset_manager_end_scope(mgr->assets);
     if (r != ECS_OK) return r;
 
     if (out_instance_id) *out_instance_id = instanceId;

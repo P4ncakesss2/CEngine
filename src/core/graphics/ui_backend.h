@@ -1,6 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
-
+#include <stdbool.h>
 typedef struct GLFWwindow GLFWwindow;
 
 #ifdef __cplusplus

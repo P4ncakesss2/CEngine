@@ -514,14 +514,12 @@ static void destroy_frame_buffers(Renderer* r, Context* ctx, FrameObjectBuffer* 
         .occupiedOffset = offsetof(SlotType, occupied), \
     }
 
-GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetManager* assets, Ecs* ecs,
-                              RenderTarget renderTarget, UiDrawFn uiDrawFn, void* uiDrawUserdata) {
+GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetManager* assets, Ecs* ecs, UiDrawFn uiDrawFn, void* uiDrawUserdata) {
     memset(r, 0, sizeof(Renderer));
     r->ctx = ctx;
     r->window = window;
     r->ecs = ecs;
     r->assets = assets;
-    r->renderTarget = renderTarget;
     r->uiDrawFn = uiDrawFn;
     r->uiDrawUserdata = uiDrawUserdata;
 
@@ -571,23 +569,6 @@ GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetMan
     return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
 }
 
-static void destroy_scene_target(Renderer* r) {
-    if (r->sceneTarget.imguiTexId) {
-        ui_remove_texture(r->sceneTarget.imguiTexId);
-        r->sceneTarget.imguiTexId = NULL;
-    }
-    if (r->sceneTarget.color.handle != VK_NULL_HANDLE) {
-        image_destroy(r->ctx, &r->sceneTarget.color);
-    }
-    if (r->sceneTarget.depth.handle != VK_NULL_HANDLE) {
-        image_destroy(r->ctx, &r->sceneTarget.depth);
-    }
-    memset(&r->sceneTarget.color, 0, sizeof(r->sceneTarget.color));
-    memset(&r->sceneTarget.depth, 0, sizeof(r->sceneTarget.depth));
-    r->sceneTarget.extent          = (VkExtent2D){ 0, 0 };
-    r->sceneTarget.allocatedExtent = (VkExtent2D){ 0, 0 };
-}
-
 #define SCENE_TARGET_ALLOC_GRANULARITY 64
 
 static uint32_t round_up_to_granularity(uint32_t v) {
@@ -595,63 +576,7 @@ static uint32_t round_up_to_granularity(uint32_t v) {
            * SCENE_TARGET_ALLOC_GRANULARITY;
 }
 
-void renderer_resize_scene_target(Renderer* r, uint32_t width, uint32_t height) {
-    if (r->renderTarget != RENDER_TARGET_OFFSCREEN) return;
-    if (width == 0 || height == 0) return;
-
-    r->sceneTarget.extent = (VkExtent2D){ width, height };
-
-    bool fits = width  <= r->sceneTarget.allocatedExtent.width &&
-                height <= r->sceneTarget.allocatedExtent.height;
-    if (fits) return;
-
-    uint32_t allocWidth  = round_up_to_granularity(width);
-    uint32_t allocHeight = round_up_to_granularity(height);
-
-    Context* ctx = r->ctx;
-    context_wait_idle(ctx);
-
-    destroy_scene_target(r);
-    r->sceneTarget.extent = (VkExtent2D){ width, height };
-
-    ImageCreateInfo colorInfo = {
-        .extent = { allocWidth, allocHeight, 1 },
-        .format = r->window->swapchainSurfaceFormat.format,
-        .usage  = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                  VK_IMAGE_USAGE_SAMPLED_BIT |
-                  VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-    };
-    GraphicsResult res = image_create(ctx, &colorInfo, &r->sceneTarget.color);
-    if (res.err != GRAPHICS_OK) {
-        memset(&r->sceneTarget, 0, sizeof(r->sceneTarget));
-        return;
-    }
-
-    ImageCreateInfo depthInfo = {
-        .extent = { allocWidth, allocHeight, 1 },
-        .format = VK_FORMAT_D32_SFLOAT,
-        .usage  = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        .aspect = VK_IMAGE_ASPECT_DEPTH_BIT,
-    };
-    res = image_create(ctx, &depthInfo, &r->sceneTarget.depth);
-    if (res.err != GRAPHICS_OK) {
-        image_destroy(ctx, &r->sceneTarget.color);
-        memset(&r->sceneTarget, 0, sizeof(r->sceneTarget));
-        return;
-    }
-
-    r->sceneTarget.sampler         = r->samplers[SAMPLER_DEFAULT_INDEX];
-    r->sceneTarget.extent          = (VkExtent2D){ width, height };
-    r->sceneTarget.allocatedExtent = (VkExtent2D){ allocWidth, allocHeight };
-    r->sceneTarget.imguiTexId = ui_add_texture(r->sceneTarget.sampler, r->sceneTarget.color.view,
-                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-}
-
 VkExtent2D renderer_get_extent(const Renderer* r) {
-    if (r->renderTarget == RENDER_TARGET_OFFSCREEN) {
-        return r->sceneTarget.extent;
-    }
     return r->window->renderExtent;
 }
 
@@ -662,9 +587,6 @@ static bool slot_has_gpu_data(const MeshGpuSlot *slot) {
 void renderer_free(Renderer* r) {
     Context* ctx = r->ctx;
     context_wait_idle(ctx);
-    if (r->renderTarget == RENDER_TARGET_OFFSCREEN) {
-        destroy_scene_target(r);
-    }
     ui_shutdown();
     destroy_pipelines(r, ctx);
     destroy_frame_buffers(r, ctx, r->objectBuffers);
@@ -977,105 +899,95 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
     if (camValid) {
         sort_draw_items_back_to_front(r, r->transparentDrawItems, r->transparentDrawItemCount, camPos);
     }
+    
+    VkViewport viewport = {
+        .x = 0.0f, .y = 0.0f,
+        .width = (float)window->renderExtent.width,
+        .height = (float)window->renderExtent.height,
+        .minDepth = 0.0f, .maxDepth = 1.0f,
+    };
+    VkRect2D scissor = { .offset = { 0, 0 }, .extent = window->renderExtent };
 
-    if (r->renderTarget == RENDER_TARGET_OFFSCREEN) {
-        if (r->sceneTarget.color.handle != VK_NULL_HANDLE) {
-            barrier_image(cmd, r->sceneTarget.color.handle, VK_IMAGE_ASPECT_COLOR_BIT,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                          0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-            barrier_image(cmd, r->sceneTarget.depth.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                          0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    VkRenderingAttachmentInfo prepassDepthAttachment = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = window->depthImage.view,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = { .depthStencil = { 1.0f, 0 } },
+    };
 
-            VkViewport sceneViewport = {
-                .x = 0.0f, .y = 0.0f,
-                .width = (float)r->sceneTarget.extent.width,
-                .height = (float)r->sceneTarget.extent.height,
-                .minDepth = 0.0f, .maxDepth = 1.0f,
-            };
-            VkRect2D sceneScissor = { .offset = { 0, 0 }, .extent = r->sceneTarget.extent };
+    VkRenderingInfo prepassInfo = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = { .offset = { 0, 0 }, .extent = window->renderExtent },
+        .layerCount = 1,
+        .colorAttachmentCount = 0,
+        .pColorAttachments = NULL,
+        .pDepthAttachment = &prepassDepthAttachment,
+    };
 
-            VkRenderingAttachmentInfo scenePrepassDepthAttachment = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = r->sceneTarget.depth.view,
-                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .clearValue = { .depthStencil = { 1.0f, 0 } },
-            };
-            VkRenderingInfo scenePrepassInfo = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea = { .offset = { 0, 0 }, .extent = r->sceneTarget.extent },
-                .layerCount = 1,
-                .colorAttachmentCount = 0,
-                .pColorAttachments = NULL,
-                .pDepthAttachment = &scenePrepassDepthAttachment,
-            };
+    vkCmdBeginRendering(cmd, &prepassInfo);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->depthPrepassPipelines[msaaIdx]);
+    draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
+    vkCmdEndRendering(cmd);
 
-            vkCmdBeginRendering(cmd, &scenePrepassInfo);
-            vkCmdSetViewport(cmd, 0, 1, &sceneViewport);
-            vkCmdSetScissor(cmd, 0, 1, &sceneScissor);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->depthPrepassPipelines[0]);
-            draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
-            vkCmdEndRendering(cmd);
+    barrier_image(cmd, window->depthImage.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
 
-            barrier_image(cmd, r->sceneTarget.depth.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
-                          VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+    VkRenderingAttachmentInfo colorAttachment = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = window->colorImage.view,
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = msaaEnabled ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = { .color = { { 0.05f, 0.05f, 0.05f, 1.0f } } },
+    };
+    if (msaaEnabled) {
+        colorAttachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        colorAttachment.resolveImageView = window->resolveImage.view;
+        colorAttachment.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
 
-            VkRenderingAttachmentInfo sceneColorAttachment = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = r->sceneTarget.color.view,
-                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .clearValue = { .color = { { 0.05f, 0.05f, 0.05f, 1.0f } } },
-            };
-            VkRenderingAttachmentInfo sceneGeometryDepthAttachment = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = r->sceneTarget.depth.view,
-                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-                .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            };
-            VkRenderingInfo sceneGeometryInfo = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea = { .offset = { 0, 0 }, .extent = r->sceneTarget.extent },
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &sceneColorAttachment,
-                .pDepthAttachment = &sceneGeometryDepthAttachment,
-            };
+    VkRenderingAttachmentInfo geometryDepthAttachment = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = window->depthImage.view,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    };
 
-            vkCmdBeginRendering(cmd, &sceneGeometryInfo);
-            vkCmdSetViewport(cmd, 0, 1, &sceneViewport);
-            vkCmdSetScissor(cmd, 0, 1, &sceneScissor);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[0]);
-            draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
+    VkRenderingInfo geometryInfo = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = { .offset = { 0, 0 }, .extent = window->renderExtent },
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachment,
+        .pDepthAttachment = &geometryDepthAttachment,
+    };
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[0]);
-            draw_items(r, cmd, cb->address, ob->address, mb->address, r->transparentDrawItems, r->transparentDrawItemCount);
+    vkCmdBeginRendering(cmd, &geometryInfo);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[msaaIdx]);
+    draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
 
-            vkCmdEndRendering(cmd);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[msaaIdx]);
+    draw_items(r, cmd, cb->address, ob->address, mb->address, r->transparentDrawItems, r->transparentDrawItemCount);
 
-            barrier_image(cmd, r->sceneTarget.color.handle, VK_IMAGE_ASPECT_COLOR_BIT,
-                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-        }
+    vkCmdEndRendering(cmd);
 
+    if (r->uiActive) {
         VkRenderingAttachmentInfo uiAttachment = {
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = msaaEnabled ? window->resolveImage.view : window->colorImage.view,
             .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = { .color = { { 0.05f, 0.05f, 0.05f, 1.0f } } },
         };
 
         VkRenderingInfo uiInfo = {
@@ -1087,115 +999,10 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
         };
 
         vkCmdBeginRendering(cmd, &uiInfo);
-        if (r->uiActive) {
-            ui_render(cmd);
-        }
-        vkCmdEndRendering(cmd);
-    } else {
-        VkViewport viewport = {
-            .x = 0.0f, .y = 0.0f,
-            .width = (float)window->renderExtent.width,
-            .height = (float)window->renderExtent.height,
-            .minDepth = 0.0f, .maxDepth = 1.0f,
-        };
-        VkRect2D scissor = { .offset = { 0, 0 }, .extent = window->renderExtent };
-
-        VkRenderingAttachmentInfo prepassDepthAttachment = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = window->depthImage.view,
-            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = { .depthStencil = { 1.0f, 0 } },
-        };
-
-        VkRenderingInfo prepassInfo = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .renderArea = { .offset = { 0, 0 }, .extent = window->renderExtent },
-            .layerCount = 1,
-            .colorAttachmentCount = 0,
-            .pColorAttachments = NULL,
-            .pDepthAttachment = &prepassDepthAttachment,
-        };
-
-        vkCmdBeginRendering(cmd, &prepassInfo);
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->depthPrepassPipelines[msaaIdx]);
-        draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
+        ui_render(cmd);
         vkCmdEndRendering(cmd);
-
-        barrier_image(cmd, window->depthImage.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
-                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-
-        VkRenderingAttachmentInfo colorAttachment = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = window->colorImage.view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = msaaEnabled ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = { .color = { { 0.05f, 0.05f, 0.05f, 1.0f } } },
-        };
-        if (msaaEnabled) {
-            colorAttachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
-            colorAttachment.resolveImageView = window->resolveImage.view;
-            colorAttachment.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        }
-
-        VkRenderingAttachmentInfo geometryDepthAttachment = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = window->depthImage.view,
-            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        };
-
-        VkRenderingInfo geometryInfo = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .renderArea = { .offset = { 0, 0 }, .extent = window->renderExtent },
-            .layerCount = 1,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &colorAttachment,
-            .pDepthAttachment = &geometryDepthAttachment,
-        };
-
-        vkCmdBeginRendering(cmd, &geometryInfo);
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[msaaIdx]);
-        draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[msaaIdx]);
-        draw_items(r, cmd, cb->address, ob->address, mb->address, r->transparentDrawItems, r->transparentDrawItemCount);
-
-        vkCmdEndRendering(cmd);
-
-        if (r->uiActive) {
-            VkRenderingAttachmentInfo uiAttachment = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = msaaEnabled ? window->resolveImage.view : window->colorImage.view,
-                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            };
-
-            VkRenderingInfo uiInfo = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea = { .offset = { 0, 0 }, .extent = window->renderExtent },
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &uiAttachment,
-            };
-
-            vkCmdBeginRendering(cmd, &uiInfo);
-            vkCmdSetViewport(cmd, 0, 1, &viewport);
-            vkCmdSetScissor(cmd, 0, 1, &scissor);
-            ui_render(cmd);
-            vkCmdEndRendering(cmd);
-        }
     }
 
     barrier_image(cmd, blitSrcImage, VK_IMAGE_ASPECT_COLOR_BIT,

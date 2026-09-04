@@ -26,7 +26,6 @@ struct AssetSlot {
     char       *key;
     void       *data;
     bool        occupied;
-    AssetScope  scope;
 };
 
 static uint64_t fnv1a64(const void *data, size_t len, uint64_t hash) {
@@ -94,7 +93,6 @@ static AssetSlot *table_insert_new(AssetManager *mgr, AssetHandle handle, AssetT
     s->type = type;
     s->key = key;
     s->occupied = true;
-    s->scope = mgr->currentScope;
     mgr->count++;
     return s;
 }
@@ -174,7 +172,6 @@ AssetResult asset_load(AssetManager *mgr, AssetType type, const char *vpath, Ass
 
     if (slot) {
         if (slot->type != type || strcmp(slot->key, vpath) != 0) return ASSET_ERR_HASH_COLLISION;
-        if (mgr->currentScope == ASSET_SCOPE_PERSISTENT) slot->scope = ASSET_SCOPE_PERSISTENT;
         if (!slot->data) {
             AssetResult r = build_from_vfs(mgr, slot);
             if (r != ASSET_OK) return r;
@@ -205,7 +202,6 @@ AssetResult asset_create(AssetManager *mgr, AssetType type, const char *name, vo
 
     if (slot) {
         if (slot->type != type || strcmp(slot->key, name) != 0) return ASSET_ERR_HASH_COLLISION;
-        if (mgr->currentScope == ASSET_SCOPE_PERSISTENT) slot->scope = ASSET_SCOPE_PERSISTENT;
         if (slot->data) {
             if (mgr->types[type].free_fn) mgr->types[type].free_fn(asset_data);
         } else {
@@ -264,48 +260,6 @@ AssetHandle asset_ref_resolve(AssetManager *mgr, Ecs* ecs, AssetType type, Asset
     if (asset_load(mgr, type, ecs_string_get(ecs, ref->vpath_id), &h) != ASSET_OK) return ASSET_INVALID_HANDLE;
     ref->handle = h;
     return h;
-}
-
-void asset_manager_begin_scope(AssetManager *mgr, AssetScope scope) {
-    if (!mgr) return;
-    mgr->currentScope = scope;
-}
-
-void asset_manager_end_scope(AssetManager *mgr) {
-    if (!mgr) return;
-    mgr->currentScope = ASSET_SCOPE_PERSISTENT;
-}
-
-void asset_manager_clear_scope(AssetManager *mgr, AssetScope scope) {
-    if (!mgr || mgr->capacity == 0) return;
-
-    AssetSlot *new_slots = calloc(mgr->capacity, sizeof(AssetSlot));
-    if (!new_slots) return; 
-
-    uint32_t mask = mgr->capacity - 1;
-    uint32_t new_count = 0;
-
-    for (uint32_t i = 0; i < mgr->capacity; i++) {
-        AssetSlot *s = &mgr->slots[i];
-        if (!s->occupied) continue;
-
-        if (s->scope == scope) {
-            if (s->data && mgr->types[s->type].free_fn) {
-                mgr->types[s->type].free_fn(s->data);
-            }
-            free(s->key);
-            continue;
-        }
-
-        uint32_t idx = (uint32_t)(s->handle & mask);
-        while (new_slots[idx].occupied) idx = (idx + 1) & mask;
-        new_slots[idx] = *s;
-        new_count++;
-    }
-
-    free(mgr->slots);
-    mgr->slots = new_slots;
-    mgr->count = new_count;
 }
 
 void asset_manager_clear(AssetManager *mgr) {

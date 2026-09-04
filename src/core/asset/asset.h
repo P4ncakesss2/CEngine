@@ -19,11 +19,6 @@ typedef enum {
 typedef uint64_t AssetHandle;
 #define ASSET_INVALID_HANDLE ((AssetHandle)0)
 
-typedef enum {
-    ASSET_SCOPE_PERSISTENT = 0,
-    ASSET_SCOPE_SCENE,
-} AssetScope;
-
 typedef uint32_t StringId; 
 
 typedef struct {
@@ -63,7 +58,6 @@ typedef struct AssetManager {
     AssetSlot    *slots;
     uint32_t      count;
     uint32_t      capacity;
-    AssetScope    currentScope;
 } AssetManager;
 
 AssetResult asset_manager_init(AssetManager *mgr, Vfs *vfs);
@@ -82,11 +76,6 @@ void        asset_unload(AssetManager *mgr, AssetHandle handle);
 AssetHandle asset_ref_resolve(AssetManager *mgr, Ecs* ecs, AssetType type, AssetRef *ref);
 
 #define ASSET_GET(mgr, handle, type) asset_get((mgr), (handle), ASSET_TYPE_ ## type)\
-
-void asset_manager_clear(AssetManager *mgr);
-void asset_manager_begin_scope(AssetManager *mgr, AssetScope scope);
-void asset_manager_end_scope(AssetManager *mgr);
-void asset_manager_clear_scope(AssetManager *mgr, AssetScope scope);
 
 uint32_t asset_manager_count_by_type(AssetManager *mgr, AssetType type);
 

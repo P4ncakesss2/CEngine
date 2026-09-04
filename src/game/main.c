@@ -103,8 +103,6 @@ static void console_draw(void) {
     igEnd();
 }
 
-/* ---- imgui draw callback ---- */
-
 static void render_ui(void* user_data) {
     EngineApp* app = (EngineApp*)user_data;
     igBegin("Performance", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing);
@@ -143,13 +141,11 @@ int main(int argc, char **argv)
         .windowTitle = "CEngine Game",
         .windowVsync = true,
         .windowMSAA = MSAA_4X,
-        .renderTarget = RENDER_TARGET_SWAPCHAIN,
         .imgui_draw_callback = &render_ui,
         .imgui_userdata = &app,
         .validationEnabled = true,
         .initialPakPath = "game.pak",
         .initialScenePath = "scenes/level1.scn",
-        .fixedUpdateRate = 60.0f,
     };
     if (app_init(&app, &config) != 0) {
         return 1;

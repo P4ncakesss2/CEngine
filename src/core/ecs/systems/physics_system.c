@@ -6,11 +6,13 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include "cvar.h"
+
+DEFINE_CVAR_INT(phys_moverSubiterations, "phys_moverSubiterations", 4);
+DEFINE_CVAR_FLOAT(phys_moverSkin, "phys_moverSkin", 0.01f);
 
 #define PHYSICS_PI 3.14159265358979323846f
 #define PHYSICS_MOVER_MAX_PLANES 16
-#define PHYSICS_MOVER_SUBITERATIONS 5
-#define PHYSICS_MOVER_SKIN 0.01f
 #define PHYSICS_MOVER_FLOOR_NORMAL_Y    0.7f
 #define PHYSICS_MOVER_CEILING_NORMAL_Y -0.7f
 
@@ -557,7 +559,7 @@ static bool physics_system_mover_plane_cb(b3ShapeId shapeId, const b3PlaneResult
 
     b3CollisionPlane *cp = &ctx->planes[ctx->count++];
     cp->plane = plane->plane;
-    cp->plane.offset += PHYSICS_MOVER_SKIN;
+    cp->plane.offset += phys_moverSkin.value.f;
     cp->pushLimit    = FLT_MAX;
     cp->push         = 0.0f;
     cp->clipVelocity = true;
@@ -603,7 +605,7 @@ static void physics_system_move_mover(PhysicsSystem *sys, Ecs *w, const Collider
     b3Vec3 finalVelocity = to_b3vec3(velocity);
     PhysicsMoverPlaneContext planeCtx;
 
-    for (int i = 0; i < PHYSICS_MOVER_SUBITERATIONS; ++i) {
+    for (int i = 0; i < phys_moverSubiterations.value.i; ++i) {
         planeCtx.count = 0;
         b3World_CollideMover(sys->world, b3Pos_zero, &capsule, filter, physics_system_mover_plane_cb, &planeCtx);
         if (planeCtx.count == 0) break;

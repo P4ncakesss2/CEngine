@@ -53,14 +53,11 @@ typedef struct AppConfig {
     const char* windowTitle;
     MSAASamples windowMSAA;
     bool windowVsync;
-
-    RenderTarget renderTarget;
     bool validationEnabled;
     void (*imgui_draw_callback)(void*);
     void* imgui_userdata;
     const char* initialScenePath;
     const char* initialPakPath;
-    float fixedUpdateRate;
 } AppConfig;
 
 int app_init(EngineApp* app, const AppConfig* config);
