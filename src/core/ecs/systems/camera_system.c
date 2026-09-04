@@ -16,7 +16,7 @@ void camera_system_update(CameraSystem *sys, Ecs *ecs, float aspect) {
     ECS_EACH(ecs, ECS_MASK(COMPONENT_Camera, COMPONENT_Transform), e) {
         Camera         *cam = ECS_GET(ecs, e, Camera);
         Transform *wt  = ECS_GET(ecs, e, Transform);
-        if (!cam || !wt || !cam->active) continue;
+        if (!cam || !wt) continue;
         sys->currentCamera = e;
 
         vec3 up, forward, position;

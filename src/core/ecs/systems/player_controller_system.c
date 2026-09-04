@@ -8,8 +8,15 @@
 #include <stdlib.h>
 #include <math.h>
 #include "physics_system.h"
+#include "cvar.h"
 
-#define PLAYER_GROUND_SNAP_VELOCITY -0.5f
+DEFINE_CVAR_FLOAT(phys_groundSnapVelocity, "phys_groundSnapVelocity", -0.5f);
+DEFINE_CVAR_FLOAT(phys_maxGroundSpeed, "phys_maxGroundSpeed", 6.0f);
+DEFINE_CVAR_FLOAT(phys_maxAirSpeed,    "phys_maxAirSpeed",    1.5f);
+DEFINE_CVAR_FLOAT(phys_groundAccel,    "phys_groundAccel",    10.0f);
+DEFINE_CVAR_FLOAT(phys_airAccel,       "phys_airAccel",       10.0f);
+DEFINE_CVAR_FLOAT(phys_groundFriction, "phys_groundFriction", 6.0f);
+DEFINE_CVAR_FLOAT(phys_jumpForce,      "phys_jumpForce",      4.5f);
 
 typedef struct {
     char dummy; 
@@ -46,40 +53,6 @@ static void player_controller_free(void *sys_data) {
     }
 }
 
-static void player_controller_update(void *sys_data, SystemManager *mgr, float dt, float alpha) {
-    (void)sys_data;
-    (void)dt;
-    (void)alpha;
-    Ecs *ecs = mgr->ecs;
-    Window *win = mgr->window;
-
-    ECS_EACH(ecs, ECS_MASK(COMPONENT_PlayerController, COMPONENT_Transform), e) {
-        PlayerController *player = ECS_GET(ecs, e, PlayerController);
-        Transform *t = ECS_GET(ecs, e, Transform);
-
-        double dx, dy;
-        window_get_mouse_delta(win, &dx, &dy);
-
-        player->yaw   -= (float)dx * player->lookSensitivity;
-        player->pitch -= (float)dy * player->lookSensitivity;
-
-        if (player->pitch > 1.5f)  player->pitch = 1.5f;
-        if (player->pitch < -1.5f) player->pitch = -1.5f;
-
-        if (window_key_pressed(win, GLFW_KEY_TAB)) {
-            window_set_cursor_mode(win, win->cursorMode == CURSOR_MODE_NORMAL ? CURSOR_MODE_DISABLED : CURSOR_MODE_NORMAL);
-        }
-        if (ecs_entity_alive(ecs, player->cameraEntity)) {
-            Transform *camT = ECS_GET(ecs, player->cameraEntity, Transform);
-            if (camT) {
-                camT->rotation[0] = player->pitch;
-            }
-        }
-        t->rotation[1] = player->yaw;
-        t->rotation[2] = 0.0f;
-    }
-}
-
 static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, float fixed_dt) {
     (void)sys_data;
     Ecs *ecs = mgr->ecs;
@@ -92,8 +65,9 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         CharacterMover* mover = ECS_GET(ecs, e, CharacterMover);
         (void)t; (void)col;
 
-        vec3 forward = { -sinf(player->yaw), 0.0f, -cosf(player->yaw) };
-        vec3 right   = { cosf(player->yaw), 0.0f, -sinf(player->yaw) };
+        float yaw = t->rotation[1];
+        vec3 forward = { -sinf(yaw), 0.0f, -cosf(yaw) };
+        vec3 right   = { cosf(yaw), 0.0f, -sinf(yaw) };
 
         vec3 wishDir = {0.0f, 0.0f, 0.0f};
         if (window_key_down(win, GLFW_KEY_W)) glm_vec3_add(wishDir, forward, wishDir);
@@ -108,10 +82,10 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         bool grounded = mover->isFloor;
 
         if (grounded) {
-            apply_friction(mover->velocity, player->groundFriction, fixed_dt);
-            accelerate(mover->velocity, wishDir, player->maxGroundSpeed, player->groundAccel, fixed_dt);
+            apply_friction(mover->velocity, phys_groundFriction.value.f, fixed_dt);
+            accelerate(mover->velocity, wishDir, phys_maxGroundSpeed.value.f, phys_groundAccel.value.f, fixed_dt);
         } else {
-            accelerate(mover->velocity, wishDir, player->maxAirSpeed, player->airAccel, fixed_dt);
+            accelerate(mover->velocity, wishDir, phys_maxAirSpeed.value.f, phys_airAccel.value.f, fixed_dt);
         }
 
         vec3 scaledGravity;
@@ -119,9 +93,9 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         glm_vec3_add(mover->velocity, scaledGravity, mover->velocity);
 
         if (grounded && window_key_down(win, GLFW_KEY_SPACE)) {
-            mover->velocity[1] = player->jumpForce;
+            mover->velocity[1] = phys_jumpForce.value.f;
         } else if (grounded && mover->velocity[1] < 0.0f) {
-            mover->velocity[1] = PLAYER_GROUND_SNAP_VELOCITY;
+            mover->velocity[1] = phys_groundSnapVelocity.value.f;
         } else if (mover->isCeiling && mover->velocity[1] > 0.0f) {
             mover->velocity[1] = 0.0f; // bonk
         }
@@ -135,6 +109,6 @@ bool player_controller_type_init(SystemManager *mgr) {
     PlayerControllerSystem *sys_data = calloc(1, sizeof(PlayerControllerSystem));
     if (!sys_data) return false;
 
-    system_type_register(mgr, SYSTEM_TYPE_PlayerController, sys_data, player_controller_free, player_controller_update, player_controller_fixed_update);
+    system_type_register(mgr, SYSTEM_TYPE_PlayerController, sys_data, player_controller_free, NULL, player_controller_fixed_update);
     return true;
 }

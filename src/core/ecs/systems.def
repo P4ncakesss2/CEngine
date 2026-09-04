@@ -1,4 +1,5 @@
 // gameplay
+SYSTEM_TYPE(CameraController, camera_controller_type_init)
 SYSTEM_TYPE(PlayerController, player_controller_type_init)
 // core
 SYSTEM_TYPE(Physics,   physics_system_type_init)

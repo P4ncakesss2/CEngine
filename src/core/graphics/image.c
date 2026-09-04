@@ -246,6 +246,177 @@ GraphicsResult image_create_staged(Context* ctx, const void* data, VkDeviceSize 
     return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
 }
 
+static GraphicsResult image_create_cube(Context* ctx, const ImageCreateInfo* info, Image* outImage) {
+    if (!ctx || !info || !outImage || info->extent.width == 0 || info->extent.height == 0) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_INVALID_ARGUMENT, .vk = VK_ERROR_INITIALIZATION_FAILED };
+    }
+
+    memset(outImage, 0, sizeof(*outImage));
+
+    VkImageCreateInfo imageInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = info->format,
+        .extent = info->extent,
+        .mipLevels = 1,
+        .arrayLayers = IMAGE_CUBE_FACES,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = info->usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    VmaAllocationCreateInfo allocInfo = {
+        .flags = info->dedicatedMemory ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+    };
+
+    VkResult vkRes = vmaCreateImage(ctx->allocator, &imageInfo, &allocInfo, &outImage->handle, &outImage->allocation, NULL);
+    if (vkRes != VK_SUCCESS) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_IMAGE_CREATION_FAILED, .vk = vkRes };
+    }
+
+    outImage->extent = info->extent;
+    outImage->format = info->format;
+    outImage->mipLevels = 1;
+
+    VkImageViewCreateInfo viewInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = outImage->handle,
+        .viewType = VK_IMAGE_VIEW_TYPE_CUBE,
+        .format = info->format,
+        .subresourceRange = {
+            .aspectMask = info->aspect,
+            .levelCount = 1,
+            .layerCount = IMAGE_CUBE_FACES,
+        },
+    };
+    vkRes = vkCreateImageView(ctx->device, &viewInfo, NULL, &outImage->view);
+    if (vkRes != VK_SUCCESS) {
+        vmaDestroyImage(ctx->allocator, outImage->handle, outImage->allocation);
+        memset(outImage, 0, sizeof(*outImage));
+        return (GraphicsResult){ .err = GRAPHICS_ERR_IMAGE_VIEW_CREATION_FAILED, .vk = vkRes };
+    }
+
+    return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
+}
+
+GraphicsResult image_create_cubemap_staged(Context* ctx, const ImageMipData faces[IMAGE_CUBE_FACES],
+                                            const ImageCreateInfo* info, Image* outImage) {
+    if (!info || !faces) {
+        return (GraphicsResult){ .err = GRAPHICS_ERR_INVALID_ARGUMENT, .vk = VK_ERROR_INITIALIZATION_FAILED };
+    }
+
+    VkDeviceSize totalSize = 0;
+    for (uint32_t i = 0; i < IMAGE_CUBE_FACES; i++) totalSize += faces[i].dataSize;
+
+    Buffer stagingBuffer;
+    GraphicsResult res = buffer_create(ctx, totalSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                       VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                       VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                                       &stagingBuffer);
+    if (res.err != GRAPHICS_OK) return res;
+
+    uint8_t* mapped = (uint8_t*)buffer_map(ctx, &stagingBuffer);
+    if (!mapped) {
+        buffer_destroy(ctx, &stagingBuffer);
+        return (GraphicsResult){ .err = GRAPHICS_ERR_OUT_OF_MEMORY, .vk = VK_ERROR_MEMORY_MAP_FAILED };
+    }
+
+    VkDeviceSize offsets[IMAGE_CUBE_FACES];
+    VkDeviceSize cursor = 0;
+    for (uint32_t i = 0; i < IMAGE_CUBE_FACES; i++) {
+        offsets[i] = cursor;
+        memcpy(mapped + cursor, faces[i].data, (size_t)faces[i].dataSize);
+        cursor += faces[i].dataSize;
+    }
+    buffer_unmap(ctx, &stagingBuffer);
+
+    VkImageAspectFlags aspect = info->aspect;
+
+    ImageCreateInfo imageInfo = *info;
+    imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+    res = image_create_cube(ctx, &imageInfo, outImage);
+    if (res.err != GRAPHICS_OK) {
+        buffer_destroy(ctx, &stagingBuffer);
+        return res;
+    }
+
+    VkCommandBufferAllocateInfo allocInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = ctx->graphicsCommandPool,
+        .commandBufferCount = 1,
+    };
+
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(ctx->device, &allocInfo, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier toDst = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = outImage->handle,
+        .subresourceRange = { .aspectMask = aspect, .levelCount = 1, .layerCount = IMAGE_CUBE_FACES },
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          0, 0, NULL, 0, NULL, 1, &toDst);
+
+    VkBufferImageCopy regions[IMAGE_CUBE_FACES];
+    for (uint32_t i = 0; i < IMAGE_CUBE_FACES; i++) {
+        regions[i] = (VkBufferImageCopy){
+            .bufferOffset = offsets[i],
+            .imageSubresource = { .aspectMask = aspect, .mipLevel = 0, .baseArrayLayer = i, .layerCount = 1 },
+            .imageExtent = { faces[i].width, faces[i].height, 1 },
+        };
+    }
+    vkCmdCopyBufferToImage(cmd, stagingBuffer.handle, outImage->handle,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, IMAGE_CUBE_FACES, regions);
+
+    VkImageMemoryBarrier toShaderRead = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = outImage->handle,
+        .subresourceRange = { .aspectMask = aspect, .levelCount = 1, .layerCount = IMAGE_CUBE_FACES },
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                          0, 0, NULL, 0, NULL, 1, &toShaderRead);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cmd,
+    };
+
+    vkQueueSubmit(ctx->queues.graphics, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(ctx->queues.graphics);
+
+    vkFreeCommandBuffers(ctx->device, ctx->graphicsCommandPool, 1, &cmd);
+    buffer_destroy(ctx, &stagingBuffer);
+
+    return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
+}
+
+
 GraphicsResult image_create_staged_mips(Context* ctx, const ImageMipData* mips, uint32_t mipCount,
                                          const ImageCreateInfo* info, Image* outImage) {
     if (!info || !mips || mipCount == 0 || mipCount > IMAGE_MAX_MIPS) {

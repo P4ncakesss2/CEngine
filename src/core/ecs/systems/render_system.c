@@ -10,6 +10,7 @@ void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer,
                            mat4 viewproj, vec3 camPos, bool camValid) {
     (void)sys;
     static RenderObject objects[MAX_FRAME_RENDER_OBJECTS];
+    static MaterialObject materials[MAX_FRAME_RENDER_OBJECTS];
     uint32_t count = 0;
 
     ECS_EACH(ecs, ECS_MASK(COMPONENT_Mesh, COMPONENT_Transform), e) {
@@ -19,21 +20,36 @@ void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer,
         Transform* wt = ECS_GET(ecs, e, Transform);
 
         RenderObject* obj = &objects[count];
-        obj->meshHandle   = asset_ref_resolve(renderer->assets, renderer->ecs, ASSET_TYPE_Mesh, &meshComp->meshRef);
-        obj->albedoHandle = ASSET_INVALID_HANDLE;
-        obj->transparent  = false;
+        MaterialObject* mat = &materials[count];
+
+        obj->meshHandle  = asset_ref_resolve(renderer->assets, renderer->ecs, ASSET_TYPE_Mesh, &meshComp->meshRef);
+        obj->transparent = false;
         glm_mat4_copy(wt->matrix, obj->model);
+
+        mat->albedoHandle = ASSET_INVALID_HANDLE;
+        mat->samplerKind  = SAMPLER_Linear_repeat;
+        mat->isTiled      = false;
+        mat->isStochasticTiled = false;
+        mat->tiling[0]    = 1.0f;
+        mat->tiling[1]    = 1.0f;
 
         Material* material = ECS_GET(ecs, e, Material);
         if (material) {
-            obj->albedoHandle = asset_ref_resolve(renderer->assets, renderer->ecs, ASSET_TYPE_Texture, &material->albedoRef);
+            mat->albedoHandle = asset_ref_resolve(renderer->assets, renderer->ecs, ASSET_TYPE_Texture, &material->albedoRef);
+            mat->samplerKind = material->sampler;
             obj->transparent  = material->isTransparent;
+            mat->isTiled      = material->isTiled;
+            if (material->isTiled) {
+                mat->tiling[0] = material->tiling[0];
+                mat->tiling[1] = material->tiling[1];
+                mat->isStochasticTiled = material->isStochasticTiled;
+            }
         }
 
         count++;
     }
 
-    renderer_draw_frame(renderer, objects, count, viewproj, camPos, camValid);
+    renderer_draw_frame(renderer, objects, materials, count, viewproj, camPos, camValid);
 }
 
 void render_system_update(RenderSystem* sys, Ecs* ecs, CameraSystem* camera, Renderer* renderer) {

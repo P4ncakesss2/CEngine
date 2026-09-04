@@ -3,7 +3,7 @@
 
 void system_type_register(SystemManager *mgr, SystemType type, void *data,
                            SystemFreeFn free_fn, SystemUpdateFn update_fn, SystemFixedUpdateFn fixed_update_fn) {
-    if (!mgr || type < 0 || type >= SYSTEM_TYPE_COUNT || !free_fn || !update_fn) return;
+    if (!mgr || type < 0 || type >= SYSTEM_TYPE_COUNT) return;
     SystemSlot *slot = &mgr->slots[type];
     slot->data       = data;
     slot->free_fn    = free_fn;

@@ -16,11 +16,6 @@ typedef struct {
     bool worldOverrideActive;
     mat4 worldOverride;
 
-    // Set true whenever gameplay code writes position/rotation directly
-    // (e.g. teleporting an entity). Systems that cache previous-frame state
-    // for interpolation (physics bodies, character movers) should snap their
-    // cached state to match and clear this flag rather than blending toward
-    // the new value.
     bool dirty;
 } Transform;
 
@@ -36,14 +31,28 @@ typedef struct {
     AssetRef meshRef;
 } Mesh;
 
+typedef enum SamplerKind {
+    SAMPLER_Linear_repeat = 0,
+    SAMPLER_Nearest_repeat,
+    SAMPLER_Linear_clamp,
+    SAMPLER_Nearest_clamp,
+    SAMPLER_Count,
+} SamplerKind;
+
 typedef struct {
     AssetRef albedoRef;
+    SamplerKind sampler;
     bool isTransparent;
+
+    bool isTiled;
+    bool isStochasticTiled;
+    vec2 tiling;
 } Material;
 
+
 typedef enum {
+    CAMERA_TYPE_Perspective = 0,
     CAMERA_TYPE_Orthogonal,
-    CAMERA_TYPE_Perspective,
 } CamType;
 
 typedef struct {
@@ -57,7 +66,6 @@ typedef struct {
     float nearPlane;
     float farPlane;
     float orthoSize;
-    bool active;
 } Camera;
 
 typedef struct {
@@ -140,16 +148,12 @@ typedef struct {
 } Collider;
 
 typedef struct {
-    float lookSensitivity;
-    float pitch;
-    float yaw;
-    float maxGroundSpeed;
-    float maxAirSpeed;
-    float groundAccel;
-    float airAccel;
-    float groundFriction;
-    float jumpForce; 
-    Entity cameraEntity;
+    
 } PlayerController;
+
+typedef struct {
+    float  pitch;
+    float  yaw;
+} FirstPersonCamera;
 
 #endif

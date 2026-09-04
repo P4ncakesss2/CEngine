@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "ecs/components.h"
 #include "window.h"
 #include "pipeline.h"
 #include "image.h"
@@ -9,8 +10,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "ui_backend.h"
-
-#define PIPELINE_CACHE_FILEPATH "pipeline_cache.bin"
 
 static inline void* gpu_slot_at(GpuSlotTable* t, uint32_t idx) {
     return (uint8_t*)t->slots + (size_t)idx * t->elemSize;
@@ -193,25 +192,40 @@ static GraphicsResult create_bindless_resources(Renderer* r, Context* ctx) {
     VkPhysicalDeviceProperties deviceProps;
     vkGetPhysicalDeviceProperties(ctx->physicalDevice, &deviceProps);
 
-    VkSamplerCreateInfo samplerInfo = {
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .magFilter = VK_FILTER_LINEAR,
-        .minFilter = VK_FILTER_LINEAR,
-        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .anisotropyEnable = true,
-        .maxAnisotropy = deviceProps.limits.maxSamplerAnisotropy,
-        .minLod = 0.0f,
-        .maxLod = VK_LOD_CLAMP_NONE,
-        .mipLodBias = 0.0f,
+    static const struct {
+        VkFilter            filter;
+        VkSamplerMipmapMode mipmapMode;
+        VkSamplerAddressMode addressMode;
+        bool                anisotropy;
+    } samplerDescs[SAMPLER_Count] = {
+        [SAMPLER_Linear_repeat]  = { VK_FILTER_LINEAR,  VK_SAMPLER_MIPMAP_MODE_LINEAR,  VK_SAMPLER_ADDRESS_MODE_REPEAT,        true  },
+        [SAMPLER_Nearest_repeat] = { VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT,        false },
+        [SAMPLER_Linear_clamp]   = { VK_FILTER_LINEAR,  VK_SAMPLER_MIPMAP_MODE_LINEAR,  VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, true  },
+        [SAMPLER_Nearest_clamp]  = { VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false },
     };
-    vkRes = vkCreateSampler(ctx->device, &samplerInfo, NULL, &r->samplers[0]);
-    if (vkRes != VK_SUCCESS) {
-        return (GraphicsResult){ .err = GRAPHICS_ERR_SAMPLER_CREATION_FAILED, .vk = vkRes };
+
+    for (uint32_t kind = 0; kind < SAMPLER_Count; kind++) {
+        VkSamplerCreateInfo samplerInfo = {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = samplerDescs[kind].filter,
+            .minFilter = samplerDescs[kind].filter,
+            .mipmapMode = samplerDescs[kind].mipmapMode,
+            .addressModeU = samplerDescs[kind].addressMode,
+            .addressModeV = samplerDescs[kind].addressMode,
+            .addressModeW = samplerDescs[kind].addressMode,
+            .anisotropyEnable = samplerDescs[kind].anisotropy,
+            .maxAnisotropy = samplerDescs[kind].anisotropy ? deviceProps.limits.maxSamplerAnisotropy : 1.0f,
+            .minLod = 0.0f,
+            .maxLod = VK_LOD_CLAMP_NONE,
+            .mipLodBias = 0.0f,
+        };
+        vkRes = vkCreateSampler(ctx->device, &samplerInfo, NULL, &r->samplers[kind]);
+        if (vkRes != VK_SUCCESS) {
+            return (GraphicsResult){ .err = GRAPHICS_ERR_SAMPLER_CREATION_FAILED, .vk = vkRes };
+        }
+        bindless_write_sampler(r, kind, r->samplers[kind]);
     }
-    bindless_write_sampler(r, 0, r->samplers[0]);
+
     static const uint8_t missingPixels[4 * 4] = {
         255,   0, 255, 255,
         0,   0,   0, 255,
@@ -354,6 +368,8 @@ static uint32_t msaa_level_index(VkSampleCountFlagBits samples) {
     }
 }
 
+#define PIPELINE_CACHE_FILEPATH "pipeline_cache.bin"
+
 static GraphicsResult create_pipeline_set(Renderer* r, Context* ctx, Window* window,
                                            VkShaderModule shaderModule,
                                            VkSampleCountFlagBits samples, uint32_t levelIndex) {
@@ -470,7 +486,7 @@ static GraphicsResult create_frame_buffer(Context* ctx, VkDeviceSize size, Frame
         &out->buffer);
     if (res.err != GRAPHICS_OK) return res;
 
-    out->mapped = (ObjectData*)buffer_map(ctx, &out->buffer);
+    out->mapped = buffer_map(ctx, &out->buffer);
 
     VkBufferDeviceAddressInfo addrInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
@@ -490,6 +506,13 @@ static void destroy_frame_buffers(Renderer* r, Context* ctx, FrameObjectBuffer* 
         buffer_destroy(ctx, &ob->buffer);
     }
 }
+
+#define GPU_SLOT_TABLE(SlotType) \
+    (GpuSlotTable){ \
+        .elemSize       = sizeof(SlotType), \
+        .handleOffset   = offsetof(SlotType, handle), \
+        .occupiedOffset = offsetof(SlotType, occupied), \
+    }
 
 GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetManager* assets, Ecs* ecs,
                               RenderTarget renderTarget, UiDrawFn uiDrawFn, void* uiDrawUserdata) {
@@ -531,7 +554,17 @@ GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetMan
             destroy_frame_buffers(r, ctx, r->cameraBuffers);
             return res;
         }
+        res = create_frame_buffer(ctx, (VkDeviceSize)MAX_FRAME_RENDER_OBJECTS * sizeof(MaterialData), &r->materialBuffers[i]);
+        if (res.err != GRAPHICS_OK) {
+            destroy_pipelines(r, ctx);
+            destroy_bindless_resources(r, ctx);
+            destroy_frame_buffers(r, ctx, r->objectBuffers);
+            destroy_frame_buffers(r, ctx, r->cameraBuffers);
+            destroy_frame_buffers(r, ctx, r->materialBuffers);
+            return res;
+        }
     }
+
     r->uiActive = uiDrawFn
         ? ui_init(window->handle, ctx->instance, ctx->physicalDevice, ctx->device, ctx->queues.graphics, MAX_FRAMES_IN_FLIGHT, MAX_FRAMES_IN_FLIGHT, window->swapchainSurfaceFormat.format)
         : false;
@@ -636,6 +669,7 @@ void renderer_free(Renderer* r) {
     destroy_pipelines(r, ctx);
     destroy_frame_buffers(r, ctx, r->objectBuffers);
     destroy_frame_buffers(r, ctx, r->cameraBuffers);
+    destroy_frame_buffers(r, ctx, r->materialBuffers);
     for (uint32_t i = 0; i < r->meshTable.capacity; i++) {
         MeshGpuSlot *s = (MeshGpuSlot*)gpu_slot_at(&r->meshTable, i);
         if (!s->occupied || !slot_has_gpu_data(s)) continue;
@@ -647,11 +681,11 @@ void renderer_free(Renderer* r) {
     memset(r, 0, sizeof(*r));
 }
 
-static MeshGpuSlot *slot_table_find(Renderer *r, AssetHandle handle) {
+static MeshGpuSlot *mesh_slot_table_find(Renderer *r, AssetHandle handle) {
     return (MeshGpuSlot*)gpu_slot_table_find(&r->meshTable, handle);
 }
 
-static MeshGpuSlot *slot_table_insert_new(Renderer *r, AssetHandle handle) {
+static MeshGpuSlot *mesh_slot_table_insert_new(Renderer *r, AssetHandle handle) {
     return (MeshGpuSlot*)gpu_slot_table_insert_new(&r->meshTable, handle);
 }
 
@@ -699,11 +733,11 @@ void renderer_clear_gpu_cache(Renderer* r) {
 static MeshGpuSlot *mesh_gpu_cache_get_or_upload(Renderer *r, AssetHandle handle, MeshAsset *mesh) {
     if (handle == ASSET_INVALID_HANDLE || !mesh) return NULL;
 
-    MeshGpuSlot *slot = slot_table_find(r, handle);
+    MeshGpuSlot *slot = mesh_slot_table_find(r, handle);
     if (slot && slot_has_gpu_data(slot)) return slot;
 
     if (!slot) {
-        slot = slot_table_insert_new(r, handle);
+        slot = mesh_slot_table_insert_new(r, handle);
         if (!slot) return NULL;
     }
 
@@ -725,11 +759,12 @@ static MeshGpuSlot *mesh_gpu_cache_get_or_upload(Renderer *r, AssetHandle handle
 
 static void sort_draw_items_back_to_front(Renderer* r, DrawItem* items, uint32_t n, vec3 camPos) {
     FrameObjectBuffer* ob = &r->objectBuffers[r->currentFrame];
+    ObjectData* objects = (ObjectData*)ob->mapped;
     if (n < 2) return;
 
     static float distSq[MAX_FRAME_RENDER_OBJECTS];
     for (uint32_t i = 0; i < n; i++) {
-        ObjectData* obj = &ob->mapped[items[i].objectIndex];
+        ObjectData* obj = &objects[items[i].objectIndex];
         vec3 pos = { obj->model[3][0], obj->model[3][1], obj->model[3][2] };
         vec3 diff;
         glm_vec3_sub(pos, camPos, diff);
@@ -750,8 +785,11 @@ static void sort_draw_items_back_to_front(Renderer* r, DrawItem* items, uint32_t
     }
 }
 
-static void build_draw_list(Renderer* r, const RenderObject* objects, uint32_t count) {
+static void build_draw_list(Renderer* r, const RenderObject* objects, const MaterialObject* materials, uint32_t count) {
     FrameObjectBuffer* ob = &r->objectBuffers[r->currentFrame];
+    FrameObjectBuffer* mb = &r->materialBuffers[r->currentFrame];
+    ObjectData* objectData = (ObjectData*)ob->mapped;
+    MaterialData* materialData = (MaterialData*)mb->mapped;
 
     r->drawItemCount = 0;
     r->transparentDrawItemCount = 0;
@@ -761,29 +799,40 @@ static void build_draw_list(Renderer* r, const RenderObject* objects, uint32_t c
     for (uint32_t objectIndex = 0; objectIndex < count; objectIndex++) {
         const RenderObject* src = &objects[objectIndex];
 
-        MeshGpuSlot *gpu = slot_table_find(r, src->meshHandle);
+        MeshGpuSlot *gpu = mesh_slot_table_find(r, src->meshHandle);
         if (!gpu || !slot_has_gpu_data(gpu)) {
             MeshAsset *mesh = asset_get(r->assets, src->meshHandle, ASSET_TYPE_Mesh);
             gpu = mesh_gpu_cache_get_or_upload(r, src->meshHandle, mesh);
         }
         if (!gpu || gpu->indexCount == 0) continue;
 
+        const MaterialObject* mat = &materials[objectIndex];
         uint32_t albedoIndex = BINDLESS_DEFAULT_INDEX;
-        uint32_t samplerIndex = SAMPLER_DEFAULT_INDEX;
-
-        TextureGpuSlot *texGpu = tex_slot_table_find(r, src->albedoHandle);
+        TextureGpuSlot *texGpu = tex_slot_table_find(r, mat->albedoHandle);
         if (!texGpu || !tex_slot_has_gpu_data(texGpu)) {
-            TextureAsset *texAsset = asset_get(r->assets, src->albedoHandle, ASSET_TYPE_Texture);
-            texGpu = texture_gpu_cache_get_or_upload(r, src->albedoHandle, texAsset);
+            TextureAsset *texAsset = asset_get(r->assets, mat->albedoHandle, ASSET_TYPE_Texture);
+            texGpu = texture_gpu_cache_get_or_upload(r, mat->albedoHandle, texAsset);
         }
         if (texGpu && tex_slot_has_gpu_data(texGpu)) {
             albedoIndex = texGpu->bindlessIndex;
         }
 
-        glm_mat4_copy(src->model, ob->mapped[objectIndex].model);
-        glm_mat4_inv((vec4*)src->model, ob->mapped[objectIndex].invmodel);
-        ob->mapped[objectIndex].albedoIndex = albedoIndex;
-        ob->mapped[objectIndex].samplerIndex = samplerIndex;
+        glm_mat4_copy(src->model, objectData[objectIndex].model);
+        glm_mat4_inv((vec4*)src->model, objectData[objectIndex].invmodel);
+
+        materialData[objectIndex].albedoIndex = albedoIndex;
+        materialData[objectIndex].samplerIndex = (uint32_t)mat->samplerKind;
+        materialData[objectIndex].isTiled = mat->isTiled ? 1u : 0u;
+        materialData[objectIndex].isStochasticTiled = false;
+        if (mat->isTiled) {
+            materialData[objectIndex].tiling[0] = mat->tiling[0];
+            materialData[objectIndex].tiling[1] = mat->tiling[1];
+            materialData[objectIndex].isStochasticTiled = mat->isStochasticTiled;
+        } else {
+            materialData[objectIndex].tiling[0] = 1.0f;
+            materialData[objectIndex].tiling[1] = 1.0f;
+        }
+
 
         DrawItem *item;
         if (src->transparent) {
@@ -792,25 +841,25 @@ static void build_draw_list(Renderer* r, const RenderObject* objects, uint32_t c
             item = &r->drawItems[r->drawItemCount++];
         }
         item->meshHandle = src->meshHandle;
-        item->albedoIndex = albedoIndex;
-        item->samplerIndex = samplerIndex;
         item->objectIndex = objectIndex;
     }
 }
 
-static void draw_items(Renderer* r, VkCommandBuffer cmd, VkDeviceAddress cameraAddress, VkDeviceAddress baseObjectAddress,
+static void draw_items(Renderer* r, VkCommandBuffer cmd, VkDeviceAddress cameraAddress,
+                        VkDeviceAddress baseObjectAddress, VkDeviceAddress baseMaterialAddress,
                         const DrawItem* items, uint32_t itemCount) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipelineLayout,
                              BINDLESS_TEXTURE_SET, 1, &r->bindlessSet, 0, NULL);
 
     for (uint32_t i = 0; i < itemCount; i++) {
         const DrawItem *item = &items[i];
-        MeshGpuSlot *gpu = slot_table_find(r, item->meshHandle);
+        MeshGpuSlot *gpu = mesh_slot_table_find(r, item->meshHandle);
         if (!gpu || !slot_has_gpu_data(gpu)) continue;
 
         RenderPushConstants pc = {
             .cameraAdress = cameraAddress,
-            .objectAddress = baseObjectAddress + (item->objectIndex * sizeof(ObjectData))
+            .objectAddress = baseObjectAddress + (item->objectIndex * sizeof(ObjectData)),
+            .materialAddress = baseMaterialAddress + (item->objectIndex * sizeof(MaterialData)),
         };
         vkCmdPushConstants(cmd, r->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                             0, sizeof(pc), &pc);
@@ -844,7 +893,7 @@ static void barrier_image(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags
     vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &barrier);
 }
 
-void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t count,
+void renderer_draw_frame(Renderer* r, const RenderObject* objects, const MaterialObject* materials, uint32_t count,
                           mat4 viewproj, vec3 camPos, bool camValid) {
     Context* ctx = r->ctx;
     Window* window = r->window;
@@ -913,6 +962,7 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
 
     FrameObjectBuffer* ob = &r->objectBuffers[r->currentFrame];
     FrameObjectBuffer* cb = &r->cameraBuffers[r->currentFrame];
+    FrameObjectBuffer* mb = &r->materialBuffers[r->currentFrame];
 
     CameraData camData = {0};
     if (camValid) {
@@ -922,14 +972,7 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
     }
     memcpy(cb->mapped, &camData, sizeof(CameraData));
 
-    RenderPushConstants pc = {
-        .cameraAdress = cb->address,
-        .objectAddress = ob->address,
-    };
-    vkCmdPushConstants(cmd, r->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                        0, sizeof(pc), &pc);
-
-    build_draw_list(r, objects, count);
+    build_draw_list(r, objects, materials, count);
 
     if (camValid) {
         sort_draw_items_back_to_front(r, r->transparentDrawItems, r->transparentDrawItemCount, camPos);
@@ -976,7 +1019,7 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
             vkCmdSetViewport(cmd, 0, 1, &sceneViewport);
             vkCmdSetScissor(cmd, 0, 1, &sceneScissor);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->depthPrepassPipelines[0]);
-            draw_items(r, cmd, cb->address, ob->address, r->drawItems, r->drawItemCount);
+            draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
             vkCmdEndRendering(cmd);
 
             barrier_image(cmd, r->sceneTarget.depth.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -1013,10 +1056,10 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
             vkCmdSetViewport(cmd, 0, 1, &sceneViewport);
             vkCmdSetScissor(cmd, 0, 1, &sceneScissor);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[0]);
-            draw_items(r, cmd, cb->address, ob->address, r->drawItems, r->drawItemCount);
+            draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
 
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[0]);
-            draw_items(r, cmd, cb->address, ob->address, r->transparentDrawItems, r->transparentDrawItemCount);
+            draw_items(r, cmd, cb->address, ob->address, mb->address, r->transparentDrawItems, r->transparentDrawItemCount);
 
             vkCmdEndRendering(cmd);
 
@@ -1079,7 +1122,7 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->depthPrepassPipelines[msaaIdx]);
-        draw_items(r, cmd, cb->address, ob->address, r->drawItems, r->drawItemCount);
+        draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
         vkCmdEndRendering(cmd);
 
         barrier_image(cmd, window->depthImage.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -1123,10 +1166,10 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, uint32_t coun
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[msaaIdx]);
-        draw_items(r, cmd, cb->address, ob->address, r->drawItems, r->drawItemCount);
+        draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[msaaIdx]);
-        draw_items(r, cmd, cb->address, ob->address, r->transparentDrawItems, r->transparentDrawItemCount);
+        draw_items(r, cmd, cb->address, ob->address, mb->address, r->transparentDrawItems, r->transparentDrawItemCount);
 
         vkCmdEndRendering(cmd);
 

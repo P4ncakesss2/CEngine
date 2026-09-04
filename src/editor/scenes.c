@@ -71,13 +71,9 @@ static void spawn_flying_camera(Ecs *ecs) {
     glm_mat4_identity(t2.matrix);
     ECS_ADD(ecs, cameraEntity, Transform, t2);
 
-    Camera cam = { 
-        .active = true, 
-        .fov = 90.0f, 
-        .nearPlane = 0.025f, 
-        .farPlane = 1000.0f, 
-        .type = CAMERA_TYPE_Perspective 
-    };
+    Camera cam = {};
+	FirstPersonCamera fpsCam = {0};
+	ECS_ADD(ecs, cameraEntity, FirstPersonCamera, fpsCam);
     ECS_ADD(ecs, cameraEntity, Camera, cam);
 
 	Parent parent = {.entity = e};
@@ -87,16 +83,7 @@ static void spawn_flying_camera(Ecs *ecs) {
 	asset_ref_set(ecs, &playerMesh.meshRef, MESH_PROC_CAPSULE);
 	ECS_ADD(ecs, e, Mesh, playerMesh);
 	
-    PlayerController player = {
-        .lookSensitivity = 0.005f,
-        .maxGroundSpeed  = 7.0f,
-        .maxAirSpeed     = 2.0f,
-        .groundAccel     = 10.0f,
-        .airAccel        = 20.0f, 
-        .groundFriction  = 6.0f,
-        .jumpForce       = 4.5f,
-		.cameraEntity = cameraEntity,
-    };
+    PlayerController player = {};
     ECS_ADD(ecs, e, PlayerController, player);
 
 	CharacterMover mover = {0};
@@ -124,6 +111,9 @@ void scene_build_level1(Ecs *w)
 	Mesh groundMesh = {0};
 	asset_ref_set(w, &groundMesh.meshRef, MESH_PROC_PLANE);
 	Material groundMaterial = {0};
+	groundMaterial.isTiled = true;
+	groundMaterial.isStochasticTiled = true;
+	glm_vec2_copy((vec2){500,500}, groundMaterial.tiling);
 	asset_ref_set(w, &groundMaterial.albedoRef, "asphalt_old_pt_1.ctex");
 
 	ECS_ADD(w, ground, Material, groundMaterial);
