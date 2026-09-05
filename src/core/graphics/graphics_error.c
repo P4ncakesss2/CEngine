@@ -17,8 +17,8 @@ const char *graphics_err_str(GraphicsError err) {
         case GRAPHICS_ERR_VMA_ALLOCATOR_CREATION_FAILED: return "Failed to create VMA memory allocator";
         case GRAPHICS_ERR_COMMAND_POOL_CREATION_FAILED: return "Failed to create command pool";
 
-        case GRAPHICS_ERR_NO_CONTEXT_INIT: return "GLFW library not initialized";
-        case GRAPHICS_ERR_WINDOW_CREATE_FAILED: return "Failed to create GLFW window";
+        case GRAPHICS_ERR_NO_CONTEXT_INIT: return "Window library not initialized";
+        case GRAPHICS_ERR_WINDOW_CREATE_FAILED: return "Failed to create window";
         case GRAPHICS_ERR_SURFACE_CREATION_FAILED: return "Failed to create Vulkan window surface";
         case GRAPHICS_ERR_VULKAN_INIT_FAILED: return "Vulkan hardware context initialization failed";
 
