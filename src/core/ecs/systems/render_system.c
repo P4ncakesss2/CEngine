@@ -6,8 +6,7 @@
 void render_system_init(RenderSystem* sys) { (void)sys; }
 void render_system_free(RenderSystem* sys) { (void)sys; }
 
-void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer,
-                           mat4 viewproj, vec3 camPos, bool camValid) {
+void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer, const CameraView* camera) {
     (void)sys;
     static RenderObject objects[MAX_FRAME_RENDER_OBJECTS];
     static MaterialObject materials[MAX_FRAME_RENDER_OBJECTS];
@@ -29,7 +28,6 @@ void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer,
         mat->albedoHandle = ASSET_INVALID_HANDLE;
         mat->samplerKind  = SAMPLER_Linear_repeat;
         mat->isTiled      = false;
-        mat->isStochasticTiled = false;
         mat->tiling[0]    = 1.0f;
         mat->tiling[1]    = 1.0f;
 
@@ -42,21 +40,28 @@ void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer,
             if (material->isTiled) {
                 mat->tiling[0] = material->tiling[0];
                 mat->tiling[1] = material->tiling[1];
-                mat->isStochasticTiled = material->isStochasticTiled;
             }
         }
 
         count++;
     }
 
-    renderer_draw_frame(renderer, objects, materials, count, viewproj, camPos, camValid);
+    SkyboxDrawParams skybox = {0};
+    ECS_EACH(ecs, ECS_MASK(COMPONENT_Skybox), e) {
+        Skybox* skyboxComp = ECS_GET(ecs, e, Skybox);
+        skybox.hdriHandle = asset_ref_resolve(renderer->assets, renderer->ecs, ASSET_TYPE_Texture, &skyboxComp->hdriRef);
+        skybox.samplerKind = SAMPLER_Linear_clamp;
+        skybox.enabled = (skybox.hdriHandle != ASSET_INVALID_HANDLE);
+        break;
+    }
+
+    renderer_draw_frame(renderer, objects, materials, count, camera, &skybox);
 }
 
 void render_system_update(RenderSystem* sys, Ecs* ecs, CameraSystem* camera, Renderer* renderer) {
-    mat4 viewproj;
-    vec3 camPos;
-    bool camValid = camera_system_get_view(camera, ecs, viewproj, camPos);
-    render_system_render(sys, ecs, renderer, viewproj, camPos, camValid);
+    CameraView camView;
+    camera_system_get_view(camera, ecs, &camView);
+    render_system_render(sys, ecs, renderer, &camView);
 }
 static void render_system_type_free(void *data) {
     render_system_free(data);

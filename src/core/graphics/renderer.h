@@ -37,7 +37,7 @@ typedef struct MaterialData {
     uint32_t albedoIndex;
     uint32_t samplerIndex;
     uint32_t isTiled;
-    uint32_t isStochasticTiled;
+    uint32_t _pad;
     vec2     tiling;
     vec2     _pad1;
 } MaterialData;
@@ -52,7 +52,6 @@ typedef struct MaterialObject {
     AssetHandle albedoHandle;
     SamplerKind samplerKind;
     bool        isTiled;
-    bool        isStochasticTiled;
     vec2        tiling;
 } MaterialObject;
 
@@ -60,11 +59,38 @@ typedef struct CameraData {
     mat4 viewproj;
 } CameraData;
 
+typedef struct CameraView {
+    mat4 viewproj;
+    mat4 invProj;
+    mat4 invViewRot;
+    vec3 position;
+    bool valid;
+} CameraView;
+
+typedef struct SkyboxDrawParams {
+    bool        enabled;
+    AssetHandle hdriHandle;
+    SamplerKind samplerKind;
+} SkyboxDrawParams;
+
 typedef struct RenderPushConstants {
     VkDeviceAddress cameraAdress;
     VkDeviceAddress objectAddress;
     VkDeviceAddress materialAddress;
 } RenderPushConstants;
+
+typedef struct SkyboxData {
+    mat4     invProj; 
+    mat4     invViewRot; 
+    uint32_t textureIndex;
+    uint32_t samplerIndex;
+    uint32_t _pad0;
+    uint32_t _pad1;
+} SkyboxData;
+
+typedef struct SkyboxPushConstants {
+    VkDeviceAddress skyboxAddress;
+} SkyboxPushConstants;
 
 typedef struct FrameObjectBuffer {
     Buffer          buffer;
@@ -128,6 +154,7 @@ typedef struct Renderer {
     FrameObjectBuffer objectBuffers[MAX_FRAMES_IN_FLIGHT];
     FrameObjectBuffer cameraBuffers[MAX_FRAMES_IN_FLIGHT];
     FrameObjectBuffer materialBuffers[MAX_FRAMES_IN_FLIGHT];
+    FrameObjectBuffer skyboxBuffers[MAX_FRAMES_IN_FLIGHT];
 
     DrawItem drawItems[MAX_FRAME_RENDER_OBJECTS];
     uint32_t drawItemCount;
@@ -140,6 +167,9 @@ typedef struct Renderer {
     VkPipeline       transparentPipelines[MSAA_LEVEL_COUNT];
     VkPipelineLayout pipelineLayout;
     VkPipelineCache  pipelineCache;
+
+    VkPipeline       skyboxPipelines[MSAA_LEVEL_COUNT];
+    VkPipelineLayout skyboxPipelineLayout;
 
     UiDrawFn uiDrawFn;
     void*    uiDrawUserdata;
@@ -154,6 +184,7 @@ void renderer_free(Renderer* r);
 void renderer_clear_gpu_cache(Renderer* r);
 
 VkExtent2D renderer_get_extent(const Renderer* r);
-void  renderer_draw_frame(Renderer* r, const RenderObject* objects, const MaterialObject* materials, uint32_t count, mat4 viewproj, vec3 camPos, bool camValid);
+void  renderer_draw_frame(Renderer* r, const RenderObject* objects, const MaterialObject* materials, uint32_t count,
+                           const CameraView* camera, const SkyboxDrawParams* skybox);
 
 #endif

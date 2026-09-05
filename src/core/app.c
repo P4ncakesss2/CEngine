@@ -133,6 +133,7 @@ static void app_sync_render_cvars(EngineApp *app)
         if (r.err != GRAPHICS_OK) {
             fprintf(stderr, "r_vsync: failed to apply: %s\n", graphics_err_str(r.err));
         }
+        r_vsync.value.i = app->window.vsync ? 1 : 0;
     }
 
     VkSampleCountFlagBits wantMsaa = (VkSampleCountFlagBits)r_msaa.value.i;
@@ -141,6 +142,7 @@ static void app_sync_render_cvars(EngineApp *app)
         if (r.err != GRAPHICS_OK) {
             fprintf(stderr, "r_msaa: failed to apply: %s\n", graphics_err_str(r.err));
         }
+        r_msaa.value.i = (int)app->window.msaa;
     }
 
     if (strcmp(r_windowTitle.value.s, app->window.title) != 0) {

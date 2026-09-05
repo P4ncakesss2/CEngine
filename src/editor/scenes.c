@@ -104,12 +104,17 @@ void scene_build_level1(Ecs *w)
 
 	spawn_flying_camera(w);
 
+	Entity sky;
+	ecs_entity_create(w, &sky);
+	Skybox skybox = {0};
+	asset_ref_set(w, &skybox.hdriRef, "skybox_plain_emx_14.ctex");
+	ECS_ADD(w, sky, Skybox, skybox);
+
 	Entity ground = spawn_node(w, "Ground", origin, GLM_VEC3_ZERO, (vec3){500, 0.25, 500});
 	Mesh groundMesh = {0};
 	asset_ref_set(w, &groundMesh.meshRef, MESH_PROC_PLANE);
 	Material groundMaterial = {0};
 	groundMaterial.isTiled = true;
-	groundMaterial.isStochasticTiled = true;
 	glm_vec2_copy((vec2){500,500}, groundMaterial.tiling);
 	asset_ref_set(w, &groundMaterial.albedoRef, "asphalt_old_pt_1.ctex");
 

@@ -143,7 +143,7 @@ int main(int argc, char **argv)
         .windowMSAA = MSAA_4X,
         .imgui_draw_callback = &render_ui,
         .imgui_userdata = &app,
-        .validationEnabled = true,
+        .validationEnabled = false,
         .initialPakPath = "game.pak",
         .initialScenePath = "scenes/level1.scn",
     };

@@ -431,10 +431,34 @@ static GraphicsResult create_pipeline_set(Renderer* r, Context* ctx, Window* win
     return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
 }
 
+static GraphicsResult create_skybox_pipeline(Renderer* r, Context* ctx, Window* window,
+                                              VkShaderModule shaderModule,
+                                              VkSampleCountFlagBits samples, uint32_t levelIndex) {
+    PipelineBuilder skyboxBuilder;
+    pipeline_builder_init(&skyboxBuilder);
+    pipeline_builder_add_shader_stage(&skyboxBuilder, VK_SHADER_STAGE_VERTEX_BIT, shaderModule, "vertexMain");
+    pipeline_builder_add_shader_stage(&skyboxBuilder, VK_SHADER_STAGE_FRAGMENT_BIT, shaderModule, "fragmentMain");
+    pipeline_builder_enable_depth_test(&skyboxBuilder, false, VK_COMPARE_OP_EQUAL);
+    pipeline_builder_set_depth_format(&skyboxBuilder, VK_FORMAT_D32_SFLOAT);
+    pipeline_builder_set_color_attachment_format(&skyboxBuilder, window->swapchainSurfaceFormat.format);
+    pipeline_builder_set_layout(&skyboxBuilder, r->skyboxPipelineLayout);
+    pipeline_builder_set_multisampling(&skyboxBuilder, samples);
+    pipeline_builder_set_cull_mode(&skyboxBuilder, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+
+    return pipeline_builder_build(ctx, &skyboxBuilder, r->pipelineCache, &r->skyboxPipelines[levelIndex]);
+}
+
 static GraphicsResult create_pipelines(Renderer* r, Context* ctx, Window* window, AssetManager* assets) {
     VkShaderModule shaderModule;
     GraphicsResult shaderRes = pipeline_create_shader_module(ctx, (const unsigned char*)geometry_spirv, geometry_spirv_size, &shaderModule);
     if (shaderRes.err != GRAPHICS_OK) return shaderRes;
+
+    VkShaderModule skyboxShaderModule;
+    GraphicsResult skyboxShaderRes = pipeline_create_shader_module(ctx, (const unsigned char*)skybox_spirv, skybox_spirv_size, &skyboxShaderModule);
+    if (skyboxShaderRes.err != GRAPHICS_OK) {
+        vkDestroyShaderModule(ctx->device, shaderModule, NULL);
+        return skyboxShaderRes;
+    }
 
     PipelineLayoutBuilder layoutBuilder;
     pipeline_layout_builder_init(&layoutBuilder);
@@ -444,7 +468,20 @@ static GraphicsResult create_pipelines(Renderer* r, Context* ctx, Window* window
     GraphicsResult pipelineRes = pipeline_layout_builder_build(ctx, &layoutBuilder, &r->pipelineLayout);
     if (pipelineRes.err != GRAPHICS_OK) {
         vkDestroyShaderModule(ctx->device, shaderModule, NULL);
+        vkDestroyShaderModule(ctx->device, skyboxShaderModule, NULL);
         return pipelineRes;
+    }
+
+    PipelineLayoutBuilder skyboxLayoutBuilder;
+    pipeline_layout_builder_init(&skyboxLayoutBuilder);
+    pipeline_layout_builder_add_set_layout(&skyboxLayoutBuilder, r->bindlessLayout);
+    pipeline_layout_builder_add_push_constant(&skyboxLayoutBuilder, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SkyboxPushConstants));
+
+    GraphicsResult skyboxLayoutRes = pipeline_layout_builder_build(ctx, &skyboxLayoutBuilder, &r->skyboxPipelineLayout);
+    if (skyboxLayoutRes.err != GRAPHICS_OK) {
+        vkDestroyShaderModule(ctx->device, shaderModule, NULL);
+        vkDestroyShaderModule(ctx->device, skyboxShaderModule, NULL);
+        return skyboxLayoutRes;
     }
 
     GraphicsResult cacheRes = pipeline_cache_create(ctx, PIPELINE_CACHE_FILEPATH, &r->pipelineCache);
@@ -457,11 +494,20 @@ static GraphicsResult create_pipelines(Renderer* r, Context* ctx, Window* window
         GraphicsResult res = create_pipeline_set(r, ctx, window, shaderModule, ALL_MSAA_LEVELS[levelIndex], levelIndex);
         if (res.err != GRAPHICS_OK) {
             vkDestroyShaderModule(ctx->device, shaderModule, NULL);
+            vkDestroyShaderModule(ctx->device, skyboxShaderModule, NULL);
             return res;
+        }
+
+        GraphicsResult skyboxRes = create_skybox_pipeline(r, ctx, window, skyboxShaderModule, ALL_MSAA_LEVELS[levelIndex], levelIndex);
+        if (skyboxRes.err != GRAPHICS_OK) {
+            vkDestroyShaderModule(ctx->device, shaderModule, NULL);
+            vkDestroyShaderModule(ctx->device, skyboxShaderModule, NULL);
+            return skyboxRes;
         }
     }
 
     vkDestroyShaderModule(ctx->device, shaderModule, NULL);
+    vkDestroyShaderModule(ctx->device, skyboxShaderModule, NULL);
     return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
 }
 
@@ -470,8 +516,10 @@ static void destroy_pipelines(Renderer* r, Context* ctx) {
         if (r->depthPrepassPipelines[i]) vkDestroyPipeline(ctx->device, r->depthPrepassPipelines[i], NULL);
         if (r->geometryPipelines[i])     vkDestroyPipeline(ctx->device, r->geometryPipelines[i], NULL);
         if (r->transparentPipelines[i])  vkDestroyPipeline(ctx->device, r->transparentPipelines[i], NULL);
+        if (r->skyboxPipelines[i])       vkDestroyPipeline(ctx->device, r->skyboxPipelines[i], NULL);
     }
     vkDestroyPipelineLayout(ctx->device, r->pipelineLayout, NULL);
+    vkDestroyPipelineLayout(ctx->device, r->skyboxPipelineLayout, NULL);
 
     pipeline_cache_save(ctx, r->pipelineCache, PIPELINE_CACHE_FILEPATH);
     pipeline_cache_destroy(ctx, r->pipelineCache);
@@ -561,6 +609,16 @@ GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetMan
             destroy_frame_buffers(r, ctx, r->materialBuffers);
             return res;
         }
+        res = create_frame_buffer(ctx, sizeof(SkyboxData), &r->skyboxBuffers[i]);
+        if (res.err != GRAPHICS_OK) {
+            destroy_pipelines(r, ctx);
+            destroy_bindless_resources(r, ctx);
+            destroy_frame_buffers(r, ctx, r->objectBuffers);
+            destroy_frame_buffers(r, ctx, r->cameraBuffers);
+            destroy_frame_buffers(r, ctx, r->materialBuffers);
+            destroy_frame_buffers(r, ctx, r->skyboxBuffers);
+            return res;
+        }
     }
 
     r->uiActive = uiDrawFn
@@ -592,6 +650,7 @@ void renderer_free(Renderer* r) {
     destroy_frame_buffers(r, ctx, r->objectBuffers);
     destroy_frame_buffers(r, ctx, r->cameraBuffers);
     destroy_frame_buffers(r, ctx, r->materialBuffers);
+    destroy_frame_buffers(r, ctx, r->skyboxBuffers);
     for (uint32_t i = 0; i < r->meshTable.capacity; i++) {
         MeshGpuSlot *s = (MeshGpuSlot*)gpu_slot_at(&r->meshTable, i);
         if (!s->occupied || !slot_has_gpu_data(s)) continue;
@@ -745,11 +804,9 @@ static void build_draw_list(Renderer* r, const RenderObject* objects, const Mate
         materialData[objectIndex].albedoIndex = albedoIndex;
         materialData[objectIndex].samplerIndex = (uint32_t)mat->samplerKind;
         materialData[objectIndex].isTiled = mat->isTiled ? 1u : 0u;
-        materialData[objectIndex].isStochasticTiled = false;
         if (mat->isTiled) {
             materialData[objectIndex].tiling[0] = mat->tiling[0];
             materialData[objectIndex].tiling[1] = mat->tiling[1];
-            materialData[objectIndex].isStochasticTiled = mat->isStochasticTiled;
         } else {
             materialData[objectIndex].tiling[0] = 1.0f;
             materialData[objectIndex].tiling[1] = 1.0f;
@@ -816,7 +873,7 @@ static void barrier_image(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags
 }
 
 void renderer_draw_frame(Renderer* r, const RenderObject* objects, const MaterialObject* materials, uint32_t count,
-                          mat4 viewproj, vec3 camPos, bool camValid) {
+                          const CameraView* camera, const SkyboxDrawParams* skybox) {
     Context* ctx = r->ctx;
     Window* window = r->window;
 
@@ -885,19 +942,38 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
     FrameObjectBuffer* ob = &r->objectBuffers[r->currentFrame];
     FrameObjectBuffer* cb = &r->cameraBuffers[r->currentFrame];
     FrameObjectBuffer* mb = &r->materialBuffers[r->currentFrame];
+    FrameObjectBuffer* sb = &r->skyboxBuffers[r->currentFrame];
 
     CameraData camData = {0};
-    if (camValid) {
-        glm_mat4_copy(viewproj, camData.viewproj);
+    if (camera->valid) {
+        glm_mat4_copy(camera->viewproj, camData.viewproj);
     } else {
         glm_mat4_identity(camData.viewproj);
     }
     memcpy(cb->mapped, &camData, sizeof(CameraData));
 
+    bool skyboxReady = false;
+    if (skybox->enabled && camera->valid) {
+        TextureGpuSlot *skyGpu = tex_slot_table_find(r, skybox->hdriHandle);
+        if (!skyGpu || !tex_slot_has_gpu_data(skyGpu)) {
+            TextureAsset *skyAsset = asset_get(r->assets, skybox->hdriHandle, ASSET_TYPE_Texture);
+            skyGpu = texture_gpu_cache_get_or_upload(r, skybox->hdriHandle, skyAsset);
+        }
+        if (skyGpu && tex_slot_has_gpu_data(skyGpu)) {
+            SkyboxData skyData = {0};
+            glm_mat4_copy(camera->invProj, skyData.invProj);
+            glm_mat4_copy(camera->invViewRot, skyData.invViewRot);
+            skyData.textureIndex = skyGpu->bindlessIndex;
+            skyData.samplerIndex = (uint32_t)skybox->samplerKind;
+            memcpy(sb->mapped, &skyData, sizeof(SkyboxData));
+            skyboxReady = true;
+        }
+    }
+
     build_draw_list(r, objects, materials, count);
 
-    if (camValid) {
-        sort_draw_items_back_to_front(r, r->transparentDrawItems, r->transparentDrawItemCount, camPos);
+    if (camera->valid) {
+        sort_draw_items_back_to_front(r, r->transparentDrawItems, r->transparentDrawItemCount, camera->position);
     }
     
     VkViewport viewport = {
@@ -973,6 +1049,17 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
     vkCmdBeginRendering(cmd, &geometryInfo);
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    if (skyboxReady) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->skyboxPipelineLayout,
+                                 BINDLESS_TEXTURE_SET, 1, &r->bindlessSet, 0, NULL);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->skyboxPipelines[msaaIdx]);
+        SkyboxPushConstants skyPc = { .skyboxAddress = sb->address };
+        vkCmdPushConstants(cmd, r->skyboxPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                            0, sizeof(skyPc), &skyPc);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[msaaIdx]);
     draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
 

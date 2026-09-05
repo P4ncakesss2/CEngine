@@ -14,8 +14,7 @@ void render_system_init(RenderSystem* sys);
 void render_system_free(RenderSystem* sys);
 void render_system_update(RenderSystem* sys, Ecs* ecs, CameraSystem* camera, Renderer* renderer);
 
-void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer,
-                           mat4 viewproj, vec3 camPos, bool camValid);
+void render_system_render(RenderSystem* sys, Ecs* ecs, Renderer* renderer, const CameraView* camera);
 
 bool render_system_type_init(SystemManager *mgr);
 

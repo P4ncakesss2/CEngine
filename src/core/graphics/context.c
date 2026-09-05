@@ -16,15 +16,42 @@ static const VkSampleCountFlagBits MSAA_CANDIDATES[] = {
 };
 static const uint32_t MSAA_CANDIDATES_SIZE = sizeof(MSAA_CANDIDATES) / sizeof(MSAA_CANDIDATES[0]);
 
-typedef struct DeviceFeatureChain {
+typedef struct DeviceFeatureQueryChain {
+    VkPhysicalDeviceVulkan11Features                vk11;
+    VkPhysicalDeviceVulkan12Features                vk12;
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extDynState;
+    VkPhysicalDeviceVulkan13Features                vk13;
+    VkPhysicalDeviceDynamicRenderingFeaturesKHR      dynRenderingExt;
+    VkPhysicalDeviceBufferDeviceAddressFeaturesKHR   bufDeviceAddrExt;
+    VkPhysicalDeviceFeatures2                       features2;
+} DeviceFeatureQueryChain;
+
+static void device_feature_query_chain_init(DeviceFeatureQueryChain* c) {
+    memset(c, 0, sizeof(*c));
+    c->vk11.sType             = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    c->vk12.sType             = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    c->vk12.pNext             = &c->vk11;
+    c->extDynState.sType      = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT;
+    c->extDynState.pNext      = &c->vk12;
+    c->vk13.sType             = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    c->vk13.pNext             = &c->extDynState;
+    c->dynRenderingExt.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+    c->dynRenderingExt.pNext  = &c->vk13;
+    c->bufDeviceAddrExt.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
+    c->bufDeviceAddrExt.pNext = &c->dynRenderingExt;
+    c->features2.sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    c->features2.pNext        = &c->bufDeviceAddrExt;
+}
+
+typedef struct DeviceFeatureCreateChain {
     VkPhysicalDeviceVulkan11Features                vk11;
     VkPhysicalDeviceVulkan12Features                vk12;
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extDynState;
     VkPhysicalDeviceVulkan13Features                vk13;
     VkPhysicalDeviceFeatures2                       features2;
-} DeviceFeatureChain;
+} DeviceFeatureCreateChain;
 
-static void device_feature_chain_init(DeviceFeatureChain* c) {
+static void device_feature_create_chain_init(DeviceFeatureCreateChain* c) {
     memset(c, 0, sizeof(*c));
     c->vk11.sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     c->vk12.sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -36,7 +63,6 @@ static void device_feature_chain_init(DeviceFeatureChain* c) {
     c->features2.sType   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     c->features2.pNext   = &c->vk13;
 }
-
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT type,
@@ -237,15 +263,16 @@ static GraphicsResult create_debug_messenger(Context* ctx) {
         return (GraphicsResult){ GRAPHICS_ERR_DEBUG_MESSENGER_CREATION_FAILED, result };
     return (GraphicsResult){ GRAPHICS_OK, VK_SUCCESS };
 }
-
 static const char** get_device_extensions(Context* ctx, uint32_t* count) {
-    const char** exts = malloc(sizeof(char*) * 2);
+    const char** exts = malloc(sizeof(char*) * 4);
     if (!exts) {
         if (count) *count = 0;
         return NULL;
     }
     uint32_t c = 0;
     exts[c++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    exts[c++] = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
+    exts[c++] = VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME;
 #ifdef __APPLE__
     exts[c++] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
 #endif
@@ -299,8 +326,6 @@ static uint32_t rate_device_suitability(VkPhysicalDevice device, const VkSurface
 {
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(device, &props);
-    if (props.apiVersion < VK_API_VERSION_1_3)
-        return 0;
 
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
@@ -335,11 +360,12 @@ static uint32_t rate_device_suitability(VkPhysicalDevice device, const VkSurface
         if (formatCount == 0 || presentModeCount == 0) return 0;
     }
 
-    DeviceFeatureChain c;
-    device_feature_chain_init(&c);
+    DeviceFeatureQueryChain c;
+    device_feature_query_chain_init(&c);
     vkGetPhysicalDeviceFeatures2(device, &c.features2);
-    if (!c.vk13.dynamicRendering ||
-        !c.features2.features.samplerAnisotropy || !c.vk12.bufferDeviceAddress)
+    if (!c.dynRenderingExt.dynamicRendering ||
+        !c.features2.features.samplerAnisotropy ||
+        !c.bufDeviceAddrExt.bufferDeviceAddress)
         return 0;
 
     uint32_t score = 1;
@@ -443,15 +469,15 @@ static GraphicsResult create_logical_device(Context* ctx) {
         };
     }
 
-    DeviceFeatureChain c;
-    device_feature_chain_init(&c);
-    c.vk13.dynamicRendering = true;
+    DeviceFeatureCreateChain c;
+    device_feature_create_chain_init(&c);
+    c.vk13.dynamicRendering                            = true;
     c.vk12.descriptorBindingSampledImageUpdateAfterBind = true;
-    c.vk12.descriptorBindingPartiallyBound = true;
-    c.features2.features.samplerAnisotropy = true;
-    c.vk12.bufferDeviceAddress = true;
-    c.vk12.shaderSampledImageArrayNonUniformIndexing = true;
-    c.vk12.runtimeDescriptorArray = true;
+    c.vk12.descriptorBindingPartiallyBound              = true;
+    c.features2.features.samplerAnisotropy              = true;
+    c.vk12.bufferDeviceAddress                          = true;
+    c.vk12.shaderSampledImageArrayNonUniformIndexing    = true;
+    c.vk12.runtimeDescriptorArray                       = true;
 
     uint32_t deviceExtCount = 0;
     const char** deviceExts = get_device_extensions(ctx, &deviceExtCount);

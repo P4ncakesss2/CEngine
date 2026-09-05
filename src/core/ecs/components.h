@@ -45,7 +45,6 @@ typedef struct {
     bool isTransparent;
 
     bool isTiled;
-    bool isStochasticTiled;
     vec2 tiling;
 } Material;
 
@@ -73,7 +72,7 @@ typedef struct {
 } Scene;
 
 typedef struct {
-    AssetRef faces[6];
+    AssetRef hdriRef;
 } Skybox;
 
 typedef enum {

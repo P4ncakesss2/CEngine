@@ -27,12 +27,9 @@ void camera_system_update(CameraSystem *sys, Ecs *ecs, float aspect) {
         glm_vec3_normalize(up);
         glm_vec3_normalize(forward);
 
-        vec3 center;
-        center[0] = position[0] - forward[0];
-        center[1] = position[1] - forward[1];
-        center[2] = position[2] - forward[2];
-
-        glm_lookat(position, center, up, cam->view);
+        vec3 lookDir;
+        glm_vec3_negate_to(forward, lookDir);
+        glm_look(position, lookDir, up, cam->view);
 
         cam->aspect = aspect;
         if (cam->type == CAMERA_TYPE_Perspective) {
@@ -57,37 +54,30 @@ bool camera_get_active(CameraSystem* sys, Ecs* ecs, Entity* out) {
     return ecs && ecs_entity_alive(ecs, sys->currentCamera);
 }
 
-void camera_system_set_override(CameraSystem* sys, mat4 viewproj, vec3 position) {
-    if (!sys) return;
-    sys->overrideActive = true;
-    glm_mat4_copy(viewproj, sys->overrideViewproj);
-    glm_vec3_copy(position, sys->overridePosition);
-}
-
-void camera_system_clear_override(CameraSystem* sys) {
-    if (!sys) return;
-    sys->overrideActive = false;
-}
-
-bool camera_system_get_view(CameraSystem* sys, Ecs* ecs, mat4 out_viewproj, vec3 out_position) {
-    glm_mat4_identity(out_viewproj);
-    glm_vec3_zero(out_position);
+bool camera_system_get_view(CameraSystem* sys, Ecs* ecs, CameraView* out) {
+    memset(out, 0, sizeof(*out));
+    glm_mat4_identity(out->viewproj);
+    glm_mat4_identity(out->invProj);
+    glm_mat4_identity(out->invViewRot);
+    out->valid = false;
     if (!sys) return false;
-
-    if (sys->overrideActive) {
-        glm_mat4_copy(sys->overrideViewproj, out_viewproj);
-        glm_vec3_copy(sys->overridePosition, out_position);
-        return true;
-    }
 
     Entity camEntity;
     bool camAlive = camera_get_active(sys, ecs, &camEntity);
-    Camera*    cam       = camAlive ? ECS_GET(ecs, camEntity, Camera) : NULL;
+    Camera*    cam          = camAlive ? ECS_GET(ecs, camEntity, Camera) : NULL;
     Transform* camTransform = camAlive ? ECS_GET(ecs, camEntity, Transform) : NULL;
     if (!cam || !camTransform) return false;
 
-    glm_mat4_copy(cam->viewproj, out_viewproj);
-    glm_vec3_copy(camTransform->position, out_position);
+    glm_mat4_copy(cam->viewproj, out->viewproj);
+    glm_vec3_copy(camTransform->position, out->position);
+
+    glm_mat4_inv(cam->proj, out->invProj);
+    mat3 viewRot3;
+    glm_mat4_pick3(cam->view, viewRot3);
+    glm_mat3_transpose(viewRot3);
+    glm_mat4_ins3(viewRot3, out->invViewRot);
+
+    out->valid = true;
     return true;
 }
 
