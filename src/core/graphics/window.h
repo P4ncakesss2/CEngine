@@ -18,6 +18,35 @@ typedef enum CursorMode {
     CURSOR_MODE_DISABLED
 } CursorMode;
 
+typedef enum {
+    KEY_UNKNOWN = 0,
+    KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
+    KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
+    KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
+    KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+    KEY_SPACE, KEY_ENTER, KEY_ESCAPE, KEY_TAB, KEY_BACKSPACE,
+    KEY_LEFT_SHIFT, KEY_RIGHT_SHIFT,
+    KEY_LEFT_CTRL,  KEY_RIGHT_CTRL,
+    KEY_LEFT_ALT,   KEY_RIGHT_ALT,
+    KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
+    KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6,
+    KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
+    KEY_GRAVE_ACCENT, 
+    KEY_COUNT
+} Key;
+
+typedef enum {
+    MOUSE_BUTTON_UNKNOWN = 0,
+
+    MOUSE_BUTTON_LEFT,
+    MOUSE_BUTTON_RIGHT,
+    MOUSE_BUTTON_MIDDLE,
+    MOUSE_BUTTON_4,
+    MOUSE_BUTTON_5,
+
+    MOUSE_BUTTON_COUNT
+} MouseButton;
+
 typedef struct InputState {
     bool keys[GLFW_KEY_LAST + 1];
     bool keysPrev[GLFW_KEY_LAST + 1];
@@ -97,12 +126,12 @@ GraphicsResult window_recreate_render_targets(Context* ctx, Window* window);
 GraphicsResult window_set_vsync(Context* ctx, Window* window, bool vsync);
 GraphicsResult window_set_msaa(Context* ctx, Window* window, VkSampleCountFlagBits samples);
 
-bool window_key_down(const Window* window, int key);
-bool window_key_pressed(const Window* window, int key);
-bool window_key_released(const Window* window, int key);
-bool window_mouse_down(const Window* window, int button);
-bool window_mouse_pressed(const Window* window, int button);
-bool window_mouse_released(const Window* window, int button);
+bool window_key_down(const Window* window, Key key);
+bool window_key_pressed(const Window* window, Key key);
+bool window_key_released(const Window* window, Key key);
+bool window_mouse_down(const Window* window, MouseButton button);
+bool window_mouse_pressed(const Window* window, MouseButton button);
+bool window_mouse_released(const Window* window, MouseButton button);
 void window_get_mouse_pos(const Window* window, double* x, double* y);
 void window_get_mouse_delta(const Window* window, double* dx, double* dy);
 void window_get_scroll_delta(const Window* window, double* sx, double* sy);

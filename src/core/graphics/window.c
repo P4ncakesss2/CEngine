@@ -550,28 +550,103 @@ void window_poll_events(Window* window) {
     glfwPollEvents();
 }
 
-bool window_key_down(const Window* window, int key) {
-    return (key >= 0 && key <= GLFW_KEY_LAST) ? window->input.keys[key] : false;
+static const int s_keyToGlfw[KEY_COUNT] = {
+    [KEY_UNKNOWN]      = GLFW_KEY_UNKNOWN,
+
+    [KEY_A] = GLFW_KEY_A, [KEY_B] = GLFW_KEY_B, [KEY_C] = GLFW_KEY_C,
+    [KEY_D] = GLFW_KEY_D, [KEY_E] = GLFW_KEY_E, [KEY_F] = GLFW_KEY_F,
+    [KEY_G] = GLFW_KEY_G, [KEY_H] = GLFW_KEY_H, [KEY_I] = GLFW_KEY_I,
+    [KEY_J] = GLFW_KEY_J, [KEY_K] = GLFW_KEY_K, [KEY_L] = GLFW_KEY_L,
+    [KEY_M] = GLFW_KEY_M, [KEY_N] = GLFW_KEY_N, [KEY_O] = GLFW_KEY_O,
+    [KEY_P] = GLFW_KEY_P, [KEY_Q] = GLFW_KEY_Q, [KEY_R] = GLFW_KEY_R,
+    [KEY_S] = GLFW_KEY_S, [KEY_T] = GLFW_KEY_T, [KEY_U] = GLFW_KEY_U,
+    [KEY_V] = GLFW_KEY_V, [KEY_W] = GLFW_KEY_W, [KEY_X] = GLFW_KEY_X,
+    [KEY_Y] = GLFW_KEY_Y, [KEY_Z] = GLFW_KEY_Z,
+
+    [KEY_0] = GLFW_KEY_0, [KEY_1] = GLFW_KEY_1, [KEY_2] = GLFW_KEY_2,
+    [KEY_3] = GLFW_KEY_3, [KEY_4] = GLFW_KEY_4, [KEY_5] = GLFW_KEY_5,
+    [KEY_6] = GLFW_KEY_6, [KEY_7] = GLFW_KEY_7, [KEY_8] = GLFW_KEY_8,
+    [KEY_9] = GLFW_KEY_9,
+
+    [KEY_SPACE]     = GLFW_KEY_SPACE,
+    [KEY_ENTER]     = GLFW_KEY_ENTER,
+    [KEY_ESCAPE]    = GLFW_KEY_ESCAPE,
+    [KEY_TAB]       = GLFW_KEY_TAB,
+    [KEY_BACKSPACE] = GLFW_KEY_BACKSPACE,
+
+    [KEY_LEFT_SHIFT]  = GLFW_KEY_LEFT_SHIFT,
+    [KEY_RIGHT_SHIFT] = GLFW_KEY_RIGHT_SHIFT,
+    [KEY_LEFT_CTRL]   = GLFW_KEY_LEFT_CONTROL,
+    [KEY_RIGHT_CTRL]  = GLFW_KEY_RIGHT_CONTROL,
+    [KEY_LEFT_ALT]    = GLFW_KEY_LEFT_ALT,
+    [KEY_RIGHT_ALT]   = GLFW_KEY_RIGHT_ALT,
+
+    [KEY_UP]    = GLFW_KEY_UP,
+    [KEY_DOWN]  = GLFW_KEY_DOWN,
+    [KEY_LEFT]  = GLFW_KEY_LEFT,
+    [KEY_RIGHT] = GLFW_KEY_RIGHT,
+
+    [KEY_F1] = GLFW_KEY_F1,   [KEY_F2] = GLFW_KEY_F2,   [KEY_F3] = GLFW_KEY_F3,
+    [KEY_F4] = GLFW_KEY_F4,   [KEY_F5] = GLFW_KEY_F5,   [KEY_F6] = GLFW_KEY_F6,
+    [KEY_F7] = GLFW_KEY_F7,   [KEY_F8] = GLFW_KEY_F8,   [KEY_F9] = GLFW_KEY_F9,
+    [KEY_F10] = GLFW_KEY_F10, [KEY_F11] = GLFW_KEY_F11, [KEY_F12] = GLFW_KEY_F12,
+
+    [KEY_GRAVE_ACCENT] = GLFW_KEY_GRAVE_ACCENT,
+};
+
+static inline int key_to_glfw(Key key) {
+    if (key < 0 || key >= KEY_COUNT) return GLFW_KEY_UNKNOWN;
+    return s_keyToGlfw[key];
 }
 
-bool window_key_pressed(const Window* window, int key) {
-    return (key >= 0 && key <= GLFW_KEY_LAST) ? (window->input.keys[key] && !window->input.keysPrev[key]) : false;
+bool window_key_down(const Window* window, Key key) {
+    int gk = key_to_glfw(key);
+    if (gk < 0 || gk > GLFW_KEY_LAST) return false;
+    return window->input.keys[gk];
 }
 
-bool window_key_released(const Window* window, int key) {
-    return (key >= 0 && key <= GLFW_KEY_LAST) ? (!window->input.keys[key] && window->input.keysPrev[key]) : false;
+bool window_key_pressed(const Window* window, Key key) {
+    int gk = key_to_glfw(key);
+    if (gk < 0 || gk > GLFW_KEY_LAST) return false;
+    return window->input.keys[gk] && !window->input.keysPrev[gk];
 }
 
-bool window_mouse_down(const Window* window, int button) {
-    return (button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST) ? window->input.mouseButtons[button] : false;
+bool window_key_released(const Window* window, Key key) {
+    int gk = key_to_glfw(key);
+    if (gk < 0 || gk > GLFW_KEY_LAST) return false;
+    return !window->input.keys[gk] && window->input.keysPrev[gk];
 }
 
-bool window_mouse_pressed(const Window* window, int button) {
-    return (button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST) ? (window->input.mouseButtons[button] && !window->input.mouseButtonsPrev[button]) : false;
+static const int s_mouseButtonToGlfw[MOUSE_BUTTON_COUNT] = {
+    [MOUSE_BUTTON_UNKNOWN] = -1,
+    [MOUSE_BUTTON_LEFT]    = GLFW_MOUSE_BUTTON_LEFT,
+    [MOUSE_BUTTON_RIGHT]   = GLFW_MOUSE_BUTTON_RIGHT,
+    [MOUSE_BUTTON_MIDDLE]  = GLFW_MOUSE_BUTTON_MIDDLE,
+    [MOUSE_BUTTON_4]       = GLFW_MOUSE_BUTTON_4,
+    [MOUSE_BUTTON_5]       = GLFW_MOUSE_BUTTON_5,
+};
+
+static inline int mouse_button_to_glfw(MouseButton button) {
+    if (button < 0 || button >= MOUSE_BUTTON_COUNT) return -1;
+    return s_mouseButtonToGlfw[button];
 }
 
-bool window_mouse_released(const Window* window, int button) {
-    return (button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST) ? (!window->input.mouseButtons[button] && window->input.mouseButtonsPrev[button]) : false;
+bool window_mouse_down(const Window* window, MouseButton button) {
+    int gb = mouse_button_to_glfw(button);
+    if (gb < 0 || gb > GLFW_MOUSE_BUTTON_LAST) return false;
+    return window->input.mouseButtons[gb];
+}
+
+bool window_mouse_pressed(const Window* window, MouseButton button) {
+    int gb = mouse_button_to_glfw(button);
+    if (gb < 0 || gb > GLFW_MOUSE_BUTTON_LAST) return false;
+    return window->input.mouseButtons[gb] && !window->input.mouseButtonsPrev[gb];
+}
+
+bool window_mouse_released(const Window* window, MouseButton button) {
+    int gb = mouse_button_to_glfw(button);
+    if (gb < 0 || gb > GLFW_MOUSE_BUTTON_LAST) return false;
+    return !window->input.mouseButtons[gb] && window->input.mouseButtonsPrev[gb];
 }
 
 void window_get_mouse_pos(const Window* window, double* x, double* y) {

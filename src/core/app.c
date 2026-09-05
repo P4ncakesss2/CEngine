@@ -4,6 +4,9 @@
 
 DEFINE_CVAR_INT(sim_maxFixedStepsPerFrame, "sim_maxFixedStepsPerFrame", 5)
 DEFINE_CVAR_FLOAT(sim_fixedUpdateRate, "sim_fixedUpdateRate", 60.0f);
+DEFINE_CVAR_INT(r_vsync, "r_vsync", 1);
+DEFINE_CVAR_INT(r_msaa,  "r_msaa",  4);
+DEFINE_CVAR_STRING(r_windowTitle, "r_windowTitle", "CEngine Game");
 
 int app_init(EngineApp* app, const AppConfig* config)
 {
@@ -17,13 +20,21 @@ int app_init(EngineApp* app, const AppConfig* config)
         fprintf(stderr, "Failed to initialize Vulkan context: %s (VkResult: %s)\n", graphics_err_str(ctx_result.err), vk_result_str(ctx_result.vk));
         return 1;
     }
+    
+    cvar_set("r_vsync", config->windowVsync ? "1" : "0");
+    {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", (int)config->windowMSAA);
+        cvar_set("r_msaa", buf);
+    }
+    if (config->windowTitle) cvar_set("r_windowTitle", config->windowTitle);
 
     WindowCreateInfo win_info = {
         .height = config->windowHeight,
         .width = config->windowWidth,
-        .title = config->windowTitle,
-        .vsync = config->windowVsync,
-        .msaa = (VkSampleCountFlagBits)config->windowMSAA,
+        .title = r_windowTitle.value.s,
+        .vsync = r_vsync.value.i != 0,
+        .msaa = (VkSampleCountFlagBits)r_msaa.value.i,
     };
     
     GraphicsResult win_result = window_create(&app->context, &app->window, &win_info);
@@ -114,6 +125,29 @@ bool app_should_close(EngineApp* app)
     return window_should_close(&app->window);
 }
 
+static void app_sync_render_cvars(EngineApp *app)
+{
+    bool wantVsync = r_vsync.value.i != 0;
+    if (wantVsync != app->window.vsync) {
+        GraphicsResult r = window_set_vsync(&app->context, &app->window, wantVsync);
+        if (r.err != GRAPHICS_OK) {
+            fprintf(stderr, "r_vsync: failed to apply: %s\n", graphics_err_str(r.err));
+        }
+    }
+
+    VkSampleCountFlagBits wantMsaa = (VkSampleCountFlagBits)r_msaa.value.i;
+    if (wantMsaa != app->window.msaa) {
+        GraphicsResult r = window_set_msaa(&app->context, &app->window, wantMsaa);
+        if (r.err != GRAPHICS_OK) {
+            fprintf(stderr, "r_msaa: failed to apply: %s\n", graphics_err_str(r.err));
+        }
+    }
+
+    if (strcmp(r_windowTitle.value.s, app->window.title) != 0) {
+        window_set_title(&app->window, r_windowTitle.value.s);
+    }
+}
+
 void app_update(EngineApp* app)
 {
     window_poll_events(&app->window);
@@ -128,6 +162,8 @@ void app_update(EngineApp* app)
 
     app->fps = app->deltaTime > 0.0f ? 1.0f / app->deltaTime : app->fps;
     app->frameTimeMs = app->deltaTime * 1000.0f;
+
+    app_sync_render_cvars(app);
 
     EcsResult frame_scene_result = scene_manager_update(&app->scenes);
     if (frame_scene_result != ECS_OK) {

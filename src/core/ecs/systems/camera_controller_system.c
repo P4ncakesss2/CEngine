@@ -1,5 +1,4 @@
 #include "camera_controller_system.h"
-#include "GLFW/glfw3.h"
 #include "../system.h"
 #include "../ecs.h"
 #include "../components.h"
@@ -23,7 +22,7 @@ static void camera_controller_update(void *sys_data, SystemManager *mgr, float d
     Ecs *ecs = mgr->ecs;
     Window *win = mgr->window;
 
-    if (window_key_pressed(win, GLFW_KEY_TAB)) {
+    if (window_key_pressed(win, KEY_TAB)) {
         window_set_cursor_mode(win, win->cursorMode == CURSOR_MODE_NORMAL ? CURSOR_MODE_DISABLED : CURSOR_MODE_NORMAL);
     }
 

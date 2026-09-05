@@ -1,5 +1,4 @@
 #include "player_controller_system.h"
-#include "GLFW/glfw3.h"
 #include "../system.h"
 #include "../ecs.h"
 #include "../components.h" 
@@ -16,7 +15,7 @@ DEFINE_CVAR_FLOAT(phys_maxAirSpeed,    "phys_maxAirSpeed",    1.5f);
 DEFINE_CVAR_FLOAT(phys_groundAccel,    "phys_groundAccel",    10.0f);
 DEFINE_CVAR_FLOAT(phys_airAccel,       "phys_airAccel",       10.0f);
 DEFINE_CVAR_FLOAT(phys_groundFriction, "phys_groundFriction", 6.0f);
-DEFINE_CVAR_FLOAT(phys_jumpForce,      "phys_jumpForce",      4.5f);
+DEFINE_CVAR_FLOAT(phys_jumpForce,      "phys_jumpForce",      5.0f);
 
 typedef struct {
     char dummy; 
@@ -70,10 +69,10 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         vec3 right   = { cosf(yaw), 0.0f, -sinf(yaw) };
 
         vec3 wishDir = {0.0f, 0.0f, 0.0f};
-        if (window_key_down(win, GLFW_KEY_W)) glm_vec3_add(wishDir, forward, wishDir);
-        if (window_key_down(win, GLFW_KEY_S)) glm_vec3_sub(wishDir, forward, wishDir);
-        if (window_key_down(win, GLFW_KEY_D)) glm_vec3_add(wishDir, right, wishDir);
-        if (window_key_down(win, GLFW_KEY_A)) glm_vec3_sub(wishDir, right, wishDir);
+        if (window_key_down(win, KEY_W)) glm_vec3_add(wishDir, forward, wishDir);
+        if (window_key_down(win, KEY_S)) glm_vec3_sub(wishDir, forward, wishDir);
+        if (window_key_down(win, KEY_D)) glm_vec3_add(wishDir, right, wishDir);
+        if (window_key_down(win, KEY_A)) glm_vec3_sub(wishDir, right, wishDir);
 
         if (glm_vec3_norm2(wishDir) > 0.0f) {
             glm_vec3_normalize(wishDir);
@@ -92,7 +91,7 @@ static void player_controller_fixed_update(void *sys_data, SystemManager *mgr, f
         glm_vec3_scale(phys->gravity, fixed_dt, scaledGravity);
         glm_vec3_add(mover->velocity, scaledGravity, mover->velocity);
 
-        if (grounded && window_key_down(win, GLFW_KEY_SPACE)) {
+        if (grounded && window_key_down(win, KEY_SPACE)) {
             mover->velocity[1] = phys_jumpForce.value.f;
         } else if (grounded && mover->velocity[1] < 0.0f) {
             mover->velocity[1] = phys_groundSnapVelocity.value.f;
