@@ -9,7 +9,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "ui_backend.h"
+#include "cvar.h"
+
+DEFINE_CVAR_INT(r_shadowsEnabled, "r_shadowsEnabled", 1);
 
 static inline void* gpu_slot_at(GpuSlotTable* t, uint32_t idx) {
     return (uint8_t*)t->slots + (size_t)idx * t->elemSize;
@@ -197,11 +201,14 @@ static GraphicsResult create_bindless_resources(Renderer* r, Context* ctx) {
         VkSamplerMipmapMode mipmapMode;
         VkSamplerAddressMode addressMode;
         bool                anisotropy;
+        bool                compareEnable;
+        VkCompareOp         compareOp;
     } samplerDescs[SAMPLER_Count] = {
-        [SAMPLER_Linear_repeat]  = { VK_FILTER_LINEAR,  VK_SAMPLER_MIPMAP_MODE_LINEAR,  VK_SAMPLER_ADDRESS_MODE_REPEAT,        true  },
-        [SAMPLER_Nearest_repeat] = { VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT,        false },
-        [SAMPLER_Linear_clamp]   = { VK_FILTER_LINEAR,  VK_SAMPLER_MIPMAP_MODE_LINEAR,  VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, true  },
-        [SAMPLER_Nearest_clamp]  = { VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false },
+        [SAMPLER_Linear_repeat]  = { VK_FILTER_LINEAR,  VK_SAMPLER_MIPMAP_MODE_LINEAR,  VK_SAMPLER_ADDRESS_MODE_REPEAT,        true,  false, VK_COMPARE_OP_ALWAYS },
+        [SAMPLER_Nearest_repeat] = { VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT,        false, false, VK_COMPARE_OP_ALWAYS },
+        [SAMPLER_Linear_clamp]   = { VK_FILTER_LINEAR,  VK_SAMPLER_MIPMAP_MODE_LINEAR,  VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, true,  false, VK_COMPARE_OP_ALWAYS },
+        [SAMPLER_Nearest_clamp]  = { VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false, false, VK_COMPARE_OP_ALWAYS },
+        [SAMPLER_Shadow]         = { VK_FILTER_LINEAR,  VK_SAMPLER_MIPMAP_MODE_LINEAR,  VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false, true,  VK_COMPARE_OP_LESS },
     };
 
     for (uint32_t kind = 0; kind < SAMPLER_Count; kind++) {
@@ -215,6 +222,8 @@ static GraphicsResult create_bindless_resources(Renderer* r, Context* ctx) {
             .addressModeW = samplerDescs[kind].addressMode,
             .anisotropyEnable = samplerDescs[kind].anisotropy,
             .maxAnisotropy = samplerDescs[kind].anisotropy ? deviceProps.limits.maxSamplerAnisotropy : 1.0f,
+            .compareEnable = samplerDescs[kind].compareEnable ? VK_TRUE : VK_FALSE,
+            .compareOp = samplerDescs[kind].compareOp,
             .minLod = 0.0f,
             .maxLod = VK_LOD_CLAMP_NONE,
             .mipLodBias = 0.0f,
@@ -347,6 +356,28 @@ static TextureGpuSlot *texture_gpu_cache_get_or_upload(Renderer *r, AssetHandle 
     slot->bindlessIndex = bindless_alloc_index(r);
     bindless_write_slot(r, slot->bindlessIndex, slot->image.view);
     return slot;
+}
+
+static GraphicsResult create_object_shadow_resources(Renderer* r, Context* ctx) {
+    ImageCreateInfo atlasInfo = {
+        .extent = { OBJECT_SHADOW_ATLAS_SIZE, OBJECT_SHADOW_ATLAS_SIZE, 1 },
+        .format = VK_FORMAT_D32_SFLOAT,
+        .usage  = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .aspect = VK_IMAGE_ASPECT_DEPTH_BIT,
+    };
+    GraphicsResult res = image_create(ctx, &atlasInfo, &r->objectShadowAtlas);
+    if (res.err != GRAPHICS_OK) return res;
+
+    r->objectShadowAtlasBindlessIndex = bindless_alloc_index(r);
+    bindless_write_slot(r, r->objectShadowAtlasBindlessIndex, r->objectShadowAtlas.view);
+
+    return (GraphicsResult){ .err = GRAPHICS_OK, .vk = VK_SUCCESS };
+}
+
+static void destroy_object_shadow_resources(Renderer* r, Context* ctx) {
+    if (r->objectShadowAtlas.handle != VK_NULL_HANDLE) {
+        image_destroy(ctx, &r->objectShadowAtlas);
+    }
 }
 
 static const VkSampleCountFlagBits ALL_MSAA_LEVELS[MSAA_LEVEL_COUNT] = {
@@ -577,8 +608,15 @@ GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetMan
     GraphicsResult res = create_bindless_resources(r, ctx);
     if (res.err != GRAPHICS_OK) return res;
 
+    res = create_object_shadow_resources(r, ctx);
+    if (res.err != GRAPHICS_OK) {
+        destroy_bindless_resources(r, ctx);
+        return res;
+    }
+
     res = create_pipelines(r, ctx, window, assets);
     if (res.err != GRAPHICS_OK) {
+        destroy_object_shadow_resources(r, ctx);
         destroy_bindless_resources(r, ctx);
         return res;
     }
@@ -619,6 +657,55 @@ GraphicsResult renderer_init(Renderer* r, Context* ctx, Window* window, AssetMan
             destroy_frame_buffers(r, ctx, r->skyboxBuffers);
             return res;
         }
+        res = create_frame_buffer(ctx, sizeof(DirLightData), &r->lightBuffers[i]);
+        if (res.err != GRAPHICS_OK) {
+            destroy_pipelines(r, ctx);
+            destroy_bindless_resources(r, ctx);
+            destroy_frame_buffers(r, ctx, r->objectBuffers);
+            destroy_frame_buffers(r, ctx, r->cameraBuffers);
+            destroy_frame_buffers(r, ctx, r->materialBuffers);
+            destroy_frame_buffers(r, ctx, r->skyboxBuffers);
+            destroy_frame_buffers(r, ctx, r->lightBuffers);
+            return res;
+        }
+        res = create_frame_buffer(ctx, (VkDeviceSize)MAX_OBJECT_SHADOW_CASTERS * sizeof(ObjectData), &r->objectShadowObjectBuffers[i]);
+        if (res.err != GRAPHICS_OK) {
+            destroy_pipelines(r, ctx);
+            destroy_bindless_resources(r, ctx);
+            destroy_frame_buffers(r, ctx, r->objectBuffers);
+            destroy_frame_buffers(r, ctx, r->cameraBuffers);
+            destroy_frame_buffers(r, ctx, r->materialBuffers);
+            destroy_frame_buffers(r, ctx, r->skyboxBuffers);
+            destroy_frame_buffers(r, ctx, r->lightBuffers);
+            destroy_frame_buffers(r, ctx, r->objectShadowObjectBuffers);
+            return res;
+        }
+        res = create_frame_buffer(ctx, (VkDeviceSize)MAX_OBJECT_SHADOW_CASTERS * sizeof(CameraData), &r->objectShadowCameraBuffers[i]);
+        if (res.err != GRAPHICS_OK) {
+            destroy_pipelines(r, ctx);
+            destroy_bindless_resources(r, ctx);
+            destroy_frame_buffers(r, ctx, r->objectBuffers);
+            destroy_frame_buffers(r, ctx, r->cameraBuffers);
+            destroy_frame_buffers(r, ctx, r->materialBuffers);
+            destroy_frame_buffers(r, ctx, r->skyboxBuffers);
+            destroy_frame_buffers(r, ctx, r->lightBuffers);
+            destroy_frame_buffers(r, ctx, r->objectShadowObjectBuffers);
+            destroy_frame_buffers(r, ctx, r->objectShadowCameraBuffers);
+            return res;
+        }
+        res = create_frame_buffer(ctx, (VkDeviceSize)MAX_OBJECT_SHADOW_CASTERS * sizeof(ObjectShadowData), &r->objectShadowDataBuffers[i]);
+        if (res.err != GRAPHICS_OK) {
+            destroy_pipelines(r, ctx);
+            destroy_bindless_resources(r, ctx);
+            destroy_frame_buffers(r, ctx, r->objectBuffers);
+            destroy_frame_buffers(r, ctx, r->cameraBuffers);
+            destroy_frame_buffers(r, ctx, r->materialBuffers);
+            destroy_frame_buffers(r, ctx, r->skyboxBuffers);
+            destroy_frame_buffers(r, ctx, r->lightBuffers);
+            destroy_frame_buffers(r, ctx, r->objectShadowObjectBuffers);
+            destroy_frame_buffers(r, ctx, r->objectShadowCameraBuffers);
+            return res;
+        }
     }
 
     r->uiActive = uiDrawFn
@@ -651,6 +738,10 @@ void renderer_free(Renderer* r) {
     destroy_frame_buffers(r, ctx, r->cameraBuffers);
     destroy_frame_buffers(r, ctx, r->materialBuffers);
     destroy_frame_buffers(r, ctx, r->skyboxBuffers);
+    destroy_frame_buffers(r, ctx, r->lightBuffers);
+    destroy_frame_buffers(r, ctx, r->objectShadowObjectBuffers);
+    destroy_frame_buffers(r, ctx, r->objectShadowCameraBuffers);
+    destroy_frame_buffers(r, ctx, r->objectShadowDataBuffers);
     for (uint32_t i = 0; i < r->meshTable.capacity; i++) {
         MeshGpuSlot *s = (MeshGpuSlot*)gpu_slot_at(&r->meshTable, i);
         if (!s->occupied || !slot_has_gpu_data(s)) continue;
@@ -658,6 +749,7 @@ void renderer_free(Renderer* r) {
         buffer_destroy(ctx, &s->indexBuffer);
     }
     free(r->meshTable.slots);
+    destroy_object_shadow_resources(r, ctx);
     destroy_bindless_resources(r, ctx);
     memset(r, 0, sizeof(*r));
 }
@@ -826,6 +918,8 @@ static void build_draw_list(Renderer* r, const RenderObject* objects, const Mate
 
 static void draw_items(Renderer* r, VkCommandBuffer cmd, VkDeviceAddress cameraAddress,
                         VkDeviceAddress baseObjectAddress, VkDeviceAddress baseMaterialAddress,
+                        VkDeviceAddress lightAddress,
+                        VkDeviceAddress objectShadowAddress, uint32_t objectShadowCount,
                         const DrawItem* items, uint32_t itemCount) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipelineLayout,
                              BINDLESS_TEXTURE_SET, 1, &r->bindlessSet, 0, NULL);
@@ -839,6 +933,11 @@ static void draw_items(Renderer* r, VkCommandBuffer cmd, VkDeviceAddress cameraA
             .cameraAdress = cameraAddress,
             .objectAddress = baseObjectAddress + (item->objectIndex * sizeof(ObjectData)),
             .materialAddress = baseMaterialAddress + (item->objectIndex * sizeof(MaterialData)),
+            .lightAddress = lightAddress,
+            .objectShadowAddress = objectShadowAddress,
+            .objectShadowCount = objectShadowCount,
+            .objectShadowAtlasIndex = r->objectShadowAtlasBindlessIndex,
+            .objectShadowSamplerIndex = (uint32_t)SAMPLER_Shadow,
         };
         vkCmdPushConstants(cmd, r->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                             0, sizeof(pc), &pc);
@@ -873,7 +972,8 @@ static void barrier_image(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags
 }
 
 void renderer_draw_frame(Renderer* r, const RenderObject* objects, const MaterialObject* materials, uint32_t count,
-                          const CameraView* camera, const SkyboxDrawParams* skybox) {
+                          const CameraView* camera, const SkyboxDrawParams* skybox, const DirectionalLightParams* light,
+                          const ObjectShadowCasterParams* shadowCasters, uint32_t shadowCasterCount) {
     Context* ctx = r->ctx;
     Window* window = r->window;
 
@@ -943,14 +1043,27 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
     FrameObjectBuffer* cb = &r->cameraBuffers[r->currentFrame];
     FrameObjectBuffer* mb = &r->materialBuffers[r->currentFrame];
     FrameObjectBuffer* sb = &r->skyboxBuffers[r->currentFrame];
+    FrameObjectBuffer* lb = &r->lightBuffers[r->currentFrame];
+    FrameObjectBuffer* osob = &r->objectShadowObjectBuffers[r->currentFrame]; /* per-caster ObjectData */
+    FrameObjectBuffer* oscb = &r->objectShadowCameraBuffers[r->currentFrame]; /* per-caster CameraData (light viewproj) */
+    FrameObjectBuffer* osdb = &r->objectShadowDataBuffers[r->currentFrame];   /* per-caster ObjectShadowData, read by the main fragment shader */
 
     CameraData camData = {0};
     if (camera->valid) {
         glm_mat4_copy(camera->viewproj, camData.viewproj);
+        glm_vec3_copy(camera->position, camData.position);
     } else {
         glm_mat4_identity(camData.viewproj);
     }
     memcpy(cb->mapped, &camData, sizeof(CameraData));
+
+    DirLightData lightData = {0};
+    if (light->enabled) {
+        glm_vec3_copy(light->direction, lightData.direction);
+        glm_vec3_copy(light->color, lightData.color);
+        lightData.intensity = light->intensity;
+    }
+    memcpy(lb->mapped, &lightData, sizeof(DirLightData));
 
     bool skyboxReady = false;
     if (skybox->enabled && camera->valid) {
@@ -975,7 +1088,183 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
     if (camera->valid) {
         sort_draw_items_back_to_front(r, r->transparentDrawItems, r->transparentDrawItemCount, camera->position);
     }
-    
+
+    uint32_t objectShadowCasterCount = 0;
+    ObjectShadowData* objectShadowData = (ObjectShadowData*)osdb->mapped;
+    memset(objectShadowData, 0, MAX_OBJECT_SHADOW_CASTERS * sizeof(ObjectShadowData));
+
+    if (light->enabled && r_shadowsEnabled.value.i && shadowCasters && shadowCasterCount > 0) {
+        vec3 lightDir;
+        glm_vec3_copy(light->direction, lightDir);
+        glm_vec3_normalize(lightDir);
+
+        vec3 up = { 0.0f, 1.0f, 0.0f };
+        if (fabsf(lightDir[1]) > 0.999f) {
+            up[0] = 1.0f;
+            up[1] = 0.0f;
+        }
+
+        objectShadowCasterCount = shadowCasterCount;
+        if (objectShadowCasterCount > MAX_OBJECT_SHADOW_CASTERS) {
+            objectShadowCasterCount = MAX_OBJECT_SHADOW_CASTERS;
+        }
+
+        ObjectData* casterObjectData = (ObjectData*)osob->mapped;
+        CameraData* casterCameraData = (CameraData*)oscb->mapped;
+
+        VkRenderingAttachmentInfo atlasDepthAttachment = {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = r->objectShadowAtlas.view,
+            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue = { .depthStencil = { 1.0f, 0 } },
+        };
+        VkRenderingInfo atlasInfo = {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .renderArea = { .offset = { 0, 0 }, .extent = { OBJECT_SHADOW_ATLAS_SIZE, OBJECT_SHADOW_ATLAS_SIZE } },
+            .layerCount = 1,
+            .colorAttachmentCount = 0,
+            .pColorAttachments = NULL,
+            .pDepthAttachment = &atlasDepthAttachment,
+        };
+
+        barrier_image(cmd, r->objectShadowAtlas.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                      0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+        vkCmdBeginRendering(cmd, &atlasInfo);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->depthPrepassPipelines[0]);
+
+        for (uint32_t i = 0; i < objectShadowCasterCount; i++) {
+            const ObjectShadowCasterParams* caster = &shadowCasters[i];
+
+            MeshGpuSlot* gpu = mesh_slot_table_find(r, caster->meshHandle);
+            if (!gpu || !slot_has_gpu_data(gpu)) {
+                MeshAsset* mesh = asset_get(r->assets, caster->meshHandle, ASSET_TYPE_Mesh);
+                gpu = mesh_gpu_cache_get_or_upload(r, caster->meshHandle, mesh);
+            }
+            if (!gpu || gpu->indexCount == 0) continue;
+
+            vec3 aMin, aMax;
+            glm_vec3_copy(caster->aabbMin, aMin);
+            glm_vec3_copy(caster->aabbMax, aMax);
+            vec3 localCorners[8] = {
+                {aMin[0], aMin[1], aMin[2]}, {aMax[0], aMin[1], aMin[2]},
+                {aMin[0], aMax[1], aMin[2]}, {aMax[0], aMax[1], aMin[2]},
+                {aMin[0], aMin[1], aMax[2]}, {aMax[0], aMin[1], aMax[2]},
+                {aMin[0], aMax[1], aMax[2]}, {aMax[0], aMax[1], aMax[2]}
+            };
+            vec3 corners[8];
+            vec3 worldCenter = {0.0f, 0.0f, 0.0f};
+            for (int k = 0; k < 8; k++) {
+                vec4 pt = {localCorners[k][0], localCorners[k][1], localCorners[k][2], 1.0f};
+                vec4 wpt;
+                glm_mat4_mulv((vec4*)caster->model, pt, wpt);
+                glm_vec3_copy(wpt, corners[k]);
+                glm_vec3_add(worldCenter, corners[k], worldCenter);
+            }
+            glm_vec3_scale(worldCenter, 1.0f / 8.0f, worldCenter);
+
+            vec3 eye, offset;
+            glm_vec3_scale(lightDir, -1.0f, offset);
+            glm_vec3_add(worldCenter, offset, eye);
+
+            mat4 lightView;
+            glm_lookat(eye, worldCenter, up, lightView);
+
+            float casterMinX = 1e30f, casterMaxX = -1e30f;
+            float casterMinY = 1e30f, casterMaxY = -1e30f;
+            float minZ = 1e30f, maxZ = -1e30f;
+
+            for (int k = 0; k < 8; k++) {
+                vec4 p1 = {corners[k][0], corners[k][1], corners[k][2], 1.0f};
+                vec4 lp1;
+                glm_mat4_mulv(lightView, p1, lp1);
+
+                if (lp1[0] < casterMinX) casterMinX = lp1[0];
+                if (lp1[0] > casterMaxX) casterMaxX = lp1[0];
+                if (lp1[1] < casterMinY) casterMinY = lp1[1];
+                if (lp1[1] > casterMaxY) casterMaxY = lp1[1];
+                
+                if (lp1[2] < minZ) minZ = lp1[2];
+                if (lp1[2] > maxZ) maxZ = lp1[2];
+
+                vec3 ptExt;
+                glm_vec3_scale(lightDir, OBJECT_SHADOW_LENGTH, ptExt);
+                glm_vec3_add(corners[k], ptExt, ptExt);
+                
+                vec4 p2 = {ptExt[0], ptExt[1], ptExt[2], 1.0f};
+                vec4 lp2;
+                glm_mat4_mulv(lightView, p2, lp2);
+                
+                if (lp2[2] < minZ) minZ = lp2[2];
+                if (lp2[2] > maxZ) maxZ = lp2[2];
+            }
+
+            float nearPlane = -maxZ - OBJECT_SHADOW_MARGIN;
+            float farPlane  = -minZ + OBJECT_SHADOW_MARGIN;
+            if (farPlane <= nearPlane + 0.1f) farPlane = nearPlane + 0.1f;
+
+            mat4 lightProj;
+            glm_ortho(casterMinX - OBJECT_SHADOW_MARGIN, casterMaxX + OBJECT_SHADOW_MARGIN, 
+                      casterMinY - OBJECT_SHADOW_MARGIN, casterMaxY + OBJECT_SHADOW_MARGIN, 
+                      nearPlane, farPlane, lightProj);
+
+            mat4 glToVulkanDepth = GLM_MAT4_IDENTITY_INIT;
+            glToVulkanDepth[1][1] = -1.0f;
+            glToVulkanDepth[2][2] = 0.5f;
+            glToVulkanDepth[3][2] = 0.5f;
+
+            mat4 vulkanLightProj, lightViewProj;
+            glm_mat4_mul(glToVulkanDepth, lightProj, vulkanLightProj);
+            glm_mat4_mul(vulkanLightProj, lightView, lightViewProj);
+
+            glm_mat4_copy(lightViewProj, casterCameraData[i].viewproj);
+            glm_vec3_copy(eye, casterCameraData[i].position);
+            glm_mat4_copy(caster->model, casterObjectData[i].model);
+            glm_mat4_inv((vec4*)caster->model, casterObjectData[i].invmodel);
+
+            uint32_t tx = i % OBJECT_SHADOW_ATLAS_GRID;
+            uint32_t ty = i / OBJECT_SHADOW_ATLAS_GRID;
+
+            VkViewport tileViewport = {
+                .x = (float)(tx * OBJECT_SHADOW_TILE_SIZE),
+                .y = (float)(ty * OBJECT_SHADOW_TILE_SIZE),
+                .width = (float)OBJECT_SHADOW_TILE_SIZE,
+                .height = (float)OBJECT_SHADOW_TILE_SIZE,
+                .minDepth = 0.0f, .maxDepth = 1.0f,
+            };
+            VkRect2D tileScissor = {
+                .offset = { (int32_t)(tx * OBJECT_SHADOW_TILE_SIZE), (int32_t)(ty * OBJECT_SHADOW_TILE_SIZE) },
+                .extent = { OBJECT_SHADOW_TILE_SIZE, OBJECT_SHADOW_TILE_SIZE },
+            };
+            vkCmdSetViewport(cmd, 0, 1, &tileViewport);
+            vkCmdSetScissor(cmd, 0, 1, &tileScissor);
+
+            DrawItem casterItem = { .meshHandle = caster->meshHandle, .objectIndex = i };
+            draw_items(r, cmd, oscb->address + (i * sizeof(CameraData)),
+                       osob->address, osob->address,
+                       0, 0, 0, &casterItem, 1);
+
+            objectShadowData[i].atlasUVOrigin[0] = (float)tx / (float)OBJECT_SHADOW_ATLAS_GRID;
+            objectShadowData[i].atlasUVOrigin[1] = (float)ty / (float)OBJECT_SHADOW_ATLAS_GRID;
+            objectShadowData[i].atlasUVScale = 1.0f / (float)OBJECT_SHADOW_ATLAS_GRID;
+            objectShadowData[i].enabled = 1u;
+            glm_mat4_copy(lightViewProj, objectShadowData[i].lightViewProj);
+        }
+
+        vkCmdEndRendering(cmd);
+
+        barrier_image(cmd, r->objectShadowAtlas.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+
     VkViewport viewport = {
         .x = 0.0f, .y = 0.0f,
         .width = (float)window->renderExtent.width,
@@ -1006,7 +1295,7 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->depthPrepassPipelines[msaaIdx]);
-    draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
+    draw_items(r, cmd, cb->address, ob->address, mb->address, 0, 0, 0, r->drawItems, r->drawItemCount);
     vkCmdEndRendering(cmd);
 
     barrier_image(cmd, window->depthImage.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -1061,10 +1350,10 @@ void renderer_draw_frame(Renderer* r, const RenderObject* objects, const Materia
     }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->geometryPipelines[msaaIdx]);
-    draw_items(r, cmd, cb->address, ob->address, mb->address, r->drawItems, r->drawItemCount);
+    draw_items(r, cmd, cb->address, ob->address, mb->address, lb->address, osdb->address, objectShadowCasterCount, r->drawItems, r->drawItemCount);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->transparentPipelines[msaaIdx]);
-    draw_items(r, cmd, cb->address, ob->address, mb->address, r->transparentDrawItems, r->transparentDrawItemCount);
+    draw_items(r, cmd, cb->address, ob->address, mb->address, lb->address, osdb->address, objectShadowCasterCount, r->transparentDrawItems, r->transparentDrawItemCount);
 
     vkCmdEndRendering(cmd);
 

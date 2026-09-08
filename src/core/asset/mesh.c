@@ -277,15 +277,32 @@ static MeshAsset *make_capsule(float radius, float height, uint32_t rings, uint3
     return mesh;
 }
 
-static void *mesh_load(const char *vpath, const void *data, size_t size) {
-    if (strcmp(vpath, MESH_PROC_CUBE) == 0)   return make_cube();
-    if (strcmp(vpath, MESH_PROC_SPHERE) == 0) return make_sphere(16, 24);
-    if (strcmp(vpath, MESH_PROC_PLANE) == 0) return make_plane();
-    if (strcmp(vpath, MESH_PROC_CAPSULE) == 0) return make_capsule(0.3f, 1.8f, 8, 24);
+static void compute_mesh_aabb(MeshAsset *mesh) {
+    if (!mesh || mesh->vertex_count == 0) return;
 
-    return load_cmsh(data, size);
+    glm_vec3_copy(mesh->vertices[0].position, mesh->aabbMin);
+    glm_vec3_copy(mesh->vertices[0].position, mesh->aabbMax);
+
+    for (uint32_t i = 1; i < mesh->vertex_count; i++) {
+        float *p = mesh->vertices[i].position;
+        for (int c = 0; c < 3; c++) {
+            if (p[c] < mesh->aabbMin[c]) mesh->aabbMin[c] = p[c];
+            if (p[c] > mesh->aabbMax[c]) mesh->aabbMax[c] = p[c];
+        }
+    }
 }
 
+static void *mesh_load(const char *vpath, const void *data, size_t size) {
+    MeshAsset *mesh;
+    if (strcmp(vpath, MESH_PROC_CUBE) == 0)        mesh = make_cube();
+    else if (strcmp(vpath, MESH_PROC_SPHERE) == 0) mesh = make_sphere(16, 24);
+    else if (strcmp(vpath, MESH_PROC_PLANE) == 0)  mesh = make_plane();
+    else if (strcmp(vpath, MESH_PROC_CAPSULE) == 0) mesh = make_capsule(0.3f, 1.8f, 8, 24);
+    else                                             mesh = load_cmsh(data, size);
+
+    compute_mesh_aabb(mesh);
+    return mesh;
+}
 static void mesh_free(void *asset_data) {
     MeshAsset *mesh = asset_data;
     if (!mesh) return;

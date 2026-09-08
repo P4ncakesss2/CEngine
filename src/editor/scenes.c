@@ -54,6 +54,9 @@ static Entity spawn_dynamic_box(Ecs *w, const char *name, vec3 pos, vec3 rot, ve
     boxCollider.maskBits = 1;
 	ECS_ADD(w, box, Collider, boxCollider);
 
+	ShadowCaster boxShadow = {};
+	ECS_ADD(w, box, ShadowCaster, boxShadow);
+
 	return box;
 }
 
@@ -82,6 +85,9 @@ static void spawn_flying_camera(Ecs *ecs) {
 	Mesh playerMesh = {0};
 	asset_ref_set(ecs, &playerMesh.meshRef, MESH_PROC_CAPSULE);
 	ECS_ADD(ecs, e, Mesh, playerMesh);
+
+	ShadowCaster playuerShadow = {};
+	ECS_ADD(ecs, e, ShadowCaster, playuerShadow);
 	
     PlayerController player = {};
     ECS_ADD(ecs, e, PlayerController, player);
@@ -109,6 +115,19 @@ void scene_build_level1(Ecs *w)
 	Skybox skybox = {0};
 	asset_ref_set(w, &skybox.hdriRef, "skybox_plain_emx_14.ctex");
 	ECS_ADD(w, sky, Skybox, skybox);
+
+	Entity sun;
+	ecs_entity_create(w, &sun);
+	Transform sunTransform = { .scale = {1, 1, 1} };
+	sunTransform.rotation[0] = glm_rad(50.0f);
+	sunTransform.rotation[1] = glm_rad(35.0f);
+	glm_mat4_identity(sunTransform.matrix);
+	ECS_ADD(w, sun, Transform, sunTransform);
+
+	DirectionalLight sunLight = {0};
+	glm_vec3_copy((vec3){1.0f, 0.96f, 0.88f}, sunLight.color);
+	sunLight.intensity = 3.0f;
+	ECS_ADD(w, sun, DirectionalLight, sunLight);
 
 	Entity ground = spawn_node(w, "Ground", origin, GLM_VEC3_ZERO, (vec3){500, 0.25, 500});
 	Mesh groundMesh = {0};
@@ -155,7 +174,7 @@ void scene_build_level1(Ecs *w)
 			snprintf(nameBuf, sizeof(nameBuf), "PyramidBox_%d", boxIndex);
 			spawn_dynamic_box(w, nameBuf, pos, GLM_VEC3_ZERO, boxHalfExtents, 50.0f, GLM_VEC3_ZERO);
 
-			boxIndex++;
+			boxIndex++; 
 		}
 	}
 

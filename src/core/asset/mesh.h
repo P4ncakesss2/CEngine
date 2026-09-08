@@ -16,6 +16,8 @@ typedef struct {
     uint32_t    vertex_count;
     uint32_t   *indices;
     uint32_t    index_count;
+    vec3        aabbMin;
+    vec3        aabbMax;
 } MeshAsset;
 
 #define MESH_PROC_CUBE    "proc:cube"

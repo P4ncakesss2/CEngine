@@ -36,6 +36,7 @@ typedef enum SamplerKind {
     SAMPLER_Nearest_repeat,
     SAMPLER_Linear_clamp,
     SAMPLER_Nearest_clamp,
+    SAMPLER_Shadow,
     SAMPLER_Count,
 } SamplerKind;
 
@@ -47,7 +48,6 @@ typedef struct {
     bool isTiled;
     vec2 tiling;
 } Material;
-
 
 typedef enum {
     CAMERA_TYPE_Perspective = 0,
@@ -74,6 +74,15 @@ typedef struct {
 typedef struct {
     AssetRef hdriRef;
 } Skybox;
+
+typedef struct {
+    vec3  color;
+    float intensity;
+} DirectionalLight;
+
+typedef struct {
+    
+} ShadowCaster;
 
 typedef enum {
     RIGID_BODY_Static,
